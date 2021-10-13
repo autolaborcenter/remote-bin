@@ -15,6 +15,9 @@ enum MsgToLidar {
 mod chassis;
 mod lidar;
 
+#[cfg(feature = "rtk")]
+mod rtk;
+
 fn main() {
     let (to_chassis, for_chassis) = channel();
     let (to_lidar, for_lidar) = channel();
