@@ -1,0 +1,19 @@
+[package]
+name = "remote-bin"
+version = "0.1.0"
+edition = "2021"
+authors = ["YdrMaster <ydrml@hotmail.com>"]
+readme = "README.md"
+
+[dependencies]
+driver = { path = "../driver" }
+pm1-control-model = { path = "../pm1-control-model" }
+pm1-sdk = { path = "../pm1-sdk-3" }
+lidar-faselase = { path = "../lidar-faselase" }
+
+# 减小二进制体积
+[profile.release]
+lto = true
+codegen-units = 1
+panic = 'abort'
+# strip -s target/release/...
