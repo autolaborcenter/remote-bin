@@ -45,6 +45,7 @@ fn main() {
                         if tokens.len() == 3 {
                             if let Some(p) = parse(tokens[1], tokens[2]) {
                                 let _ = to_chassis.send(if p.speed == 0.0 {
+                                    println!("! 127");
                                     MsgToChassis::Move(p)
                                 } else {
                                     MsgToChassis::Predict(p)
