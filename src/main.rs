@@ -1,9 +1,5 @@
-use pm1_control_model::{ChassisModel, Physical, Predictor};
-use std::{
-    net::Ipv4Addr,
-    sync::{mpsc::*, Arc, Mutex},
-    thread,
-};
+use pm1_sdk::model::{ChassisModel, Physical, Predictor};
+use std::{net::Ipv4Addr, sync::mpsc::channel, thread};
 
 enum MsgToChassis {
     PrintStatus,
@@ -40,22 +36,19 @@ fn main() {
             Ok(_) => {
                 let tokens = line.split_whitespace().collect::<Vec<_>>();
                 match tokens.get(0) {
-                    Some(&"S") => {
+                    Some(&"show") => {
                         if tokens.len() == 1 {
                             let _ = to_chassis.send(MsgToChassis::PrintStatus);
                         }
                     }
-                    Some(&"T") => {
+                    Some(&"move") => {
                         if tokens.len() == 3 {
                             if let Some(p) = parse(tokens[1], tokens[2]) {
-                                let _ = to_chassis.send(MsgToChassis::Predict(p));
-                            }
-                        }
-                    }
-                    Some(&"P") => {
-                        if tokens.len() == 3 {
-                            if let Some(p) = parse(tokens[1], tokens[2]) {
-                                let _ = to_chassis.send(MsgToChassis::Move(p));
+                                let _ = to_chassis.send(if p.speed == 0.0 {
+                                    MsgToChassis::Move(p)
+                                } else {
+                                    MsgToChassis::Predict(p)
+                                });
                             }
                         }
                     }

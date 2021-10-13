@@ -1,6 +1,12 @@
-﻿use crate::{MsgToChassis, MsgToLidar};
-use driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple};
-use lidar_faselase::{FrameCollector, Point, D10};
+﻿use super::{
+    MsgToChassis,
+    MsgToLidar::{self, *},
+};
+use lidar_faselase::{
+    driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
+    FrameCollector, Point, D10,
+};
+use pm1_sdk::model::{Odometry, Physical};
 use std::{
     f64::consts::PI,
     net::{IpAddr, SocketAddr, UdpSocket},
@@ -9,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
+pub(super) fn supervisor(_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {
@@ -41,7 +47,7 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
     SupervisorForMultiple::<D10>::new().join(2, |e| {
         match e {
             Connected(k, lidar) => {
-                println!("connected: COM{}", k);
+                eprintln!("connected: COM{}", k);
                 if let Some(i) = indexer.add(k.clone()) {
                     lidar.send(FILTERS[i]);
                     if i == 0 {
@@ -53,7 +59,7 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
                 }
             }
             Disconnected(k) => {
-                println!("disconnected: COM{}", k);
+                eprintln!("disconnected: COM{}", k);
                 if let Some(i) = indexer.remove(k) {
                     if i == 0 {
                         update_filter = true;
@@ -65,6 +71,7 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
             }
             Event(k, e, s) => {
                 let now = Instant::now();
+                // 更新
                 if let Some(j) = indexer.find(&k) {
                     if j == 1 && update_filter {
                         update_filter = false;
@@ -74,16 +81,30 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
                         frame[j].put(i as usize, s);
                     }
                 }
+                // 响应请求
                 while let Ok(msg) = mail_box.try_recv() {
                     match msg {
-                        MsgToLidar::Check(model, predictor) => {
-                            todo!()
+                        Check(model, predictor) => {
+                            const PERIOD: Duration = Duration::from_millis(40);
+                            const PERIOD_SEC: f32 = 0.04;
+
+                            let mut pose = Odometry::ZERO;
+                            let mut time = Duration::ZERO;
+                            let mut size = 1.0;
+                            for status in predictor {
+                                time += PERIOD;
+                                let delta = model.physical_to_odometry(Physical {
+                                    speed: status.speed * PERIOD_SEC,
+                                    ..status
+                                });
+                                size += delta.s;
+                                pose += delta;
+                            }
                         }
-                        MsgToLidar::Send(a) => {
-                            address = a.map(|a| SocketAddr::new(IpAddr::V4(a), 5005))
-                        }
+                        Send(a) => address = a.map(|a| SocketAddr::new(IpAddr::V4(a), 5005)),
                     }
                 }
+                // 发送
                 if let Some(a) = address {
                     if now >= send_time {
                         send_time = now + Duration::from_millis(100);

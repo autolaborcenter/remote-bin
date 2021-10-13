@@ -2,8 +2,10 @@
     MsgToChassis::{self, *},
     MsgToLidar,
 };
-use driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle};
-use pm1_sdk::{PM1Status, PM1};
+use pm1_sdk::{
+    driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
+    PM1Status, PM1,
+};
 use std::{
     sync::mpsc::{Receiver, Sender},
     thread,
