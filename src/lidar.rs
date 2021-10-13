@@ -15,7 +15,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn supervisor(_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
+mod collision;
+
+pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {
@@ -88,17 +90,32 @@ pub(super) fn supervisor(_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgT
                             const PERIOD: Duration = Duration::from_millis(40);
                             const PERIOD_SEC: f32 = 0.04;
 
+                            let target = predictor.target;
                             let mut pose = Odometry::ZERO;
                             let mut time = Duration::ZERO;
                             let mut size = 1.0;
                             for status in predictor {
                                 time += PERIOD;
+                                if time > Duration::from_secs(2) {
+                                    let _ = chassis.send(MsgToChassis::Move(target));
+                                    break;
+                                }
                                 let delta = model.physical_to_odometry(Physical {
                                     speed: status.speed * PERIOD_SEC,
                                     ..status
                                 });
                                 size += delta.s;
                                 pose += delta;
+                                if collision::detect(&frame, pose.pose, size) {
+                                    if time > Duration::from_millis(300) {
+                                        let k = time.as_secs_f32() / 2.0;
+                                        let _ = chassis.send(MsgToChassis::Move(Physical {
+                                            speed: target.speed * k,
+                                            ..target
+                                        }));
+                                    }
+                                    break;
+                                }
                             }
                         }
                         Send(a) => address = a.map(|a| SocketAddr::new(IpAddr::V4(a), 5005)),
