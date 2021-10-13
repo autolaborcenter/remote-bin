@@ -1,14 +1,15 @@
-﻿use driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple};
+﻿use crate::{MsgToChassis, MsgToLidar};
+use driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple};
 use lidar_faselase::{FrameCollector, Point, D10};
 use std::{
     f64::consts::PI,
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
-    sync::{Arc, Mutex},
+    net::{IpAddr, SocketAddr, UdpSocket},
+    sync::mpsc::{Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
 
-pub(super) fn supervisor(user_address: Arc<Mutex<Option<Ipv4Addr>>>) {
+pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {
@@ -33,6 +34,7 @@ pub(super) fn supervisor(user_address: Arc<Mutex<Option<Ipv4Addr>>>) {
     ];
 
     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let mut address = None;
     let mut send_time = Instant::now() + Duration::from_millis(100);
     let mut update_filter = false;
 
@@ -72,16 +74,23 @@ pub(super) fn supervisor(user_address: Arc<Mutex<Option<Ipv4Addr>>>) {
                         frame[j].put(i as usize, s);
                     }
                 }
-                if let Some(a) = *user_address.lock().unwrap() {
+                while let Ok(msg) = mail_box.try_recv() {
+                    match msg {
+                        MsgToLidar::Check(model, predictor) => {
+                            todo!()
+                        }
+                        MsgToLidar::Send(a) => {
+                            address = a.map(|a| SocketAddr::new(IpAddr::V4(a), 5005))
+                        }
+                    }
+                }
+                if let Some(a) = address {
                     if now >= send_time {
                         send_time = now + Duration::from_millis(100);
                         let mut buf = Vec::new();
                         frame[0].write_to(&mut buf);
                         frame[1].write_to(&mut buf);
-                        eprintln!(
-                            "{:?}",
-                            socket.send_to(buf.as_slice(), SocketAddr::new(IpAddr::V4(a), 5005))
-                        );
+                        eprintln!("{:?}", socket.send_to(buf.as_slice(), a));
                     }
                 }
             }

@@ -1,27 +1,36 @@
-use pm1_control_model::Physical;
+use pm1_control_model::{ChassisModel, Physical, Predictor};
 use std::{
     net::Ipv4Addr,
     sync::{mpsc::*, Arc, Mutex},
     thread,
 };
 
-enum Request {
-    S,
-    P(Physical),
-    T(Physical),
+enum MsgToChassis {
+    PrintStatus,
+    Predict(Physical),
+    Move(Physical),
+}
+
+enum MsgToLidar {
+    Check(ChassisModel, Predictor),
+    Send(Option<Ipv4Addr>),
 }
 
 mod chassis;
 mod lidar;
 
 fn main() {
-    let (sender, receiver) = channel();
-    thread::spawn(move || chassis::supervisor(receiver));
+    let (to_chassis, for_chassis) = channel();
+    let (to_lidar, for_lidar) = channel();
 
-    let user_address = Arc::new(Mutex::new(None));
     {
-        let user_address = user_address.clone();
-        thread::spawn(move || lidar::supervisor(user_address));
+        let to_lidar = to_lidar.clone();
+        thread::spawn(move || chassis::supervisor(to_lidar, for_chassis));
+    }
+
+    {
+        let to_chassis = to_chassis.clone();
+        thread::spawn(move || lidar::supervisor(to_chassis, for_lidar));
     }
 
     let mut line = String::new();
@@ -33,30 +42,34 @@ fn main() {
                 match tokens.get(0) {
                     Some(&"S") => {
                         if tokens.len() == 1 {
-                            let _ = sender.send(Request::S);
+                            let _ = to_chassis.send(MsgToChassis::PrintStatus);
                         }
                     }
                     Some(&"T") => {
                         if tokens.len() == 3 {
                             if let Some(p) = parse(tokens[1], tokens[2]) {
-                                let _ = sender.send(Request::T(p));
+                                let _ = to_chassis.send(MsgToChassis::Predict(p));
                             }
                         }
                     }
                     Some(&"P") => {
                         if tokens.len() == 3 {
                             if let Some(p) = parse(tokens[1], tokens[2]) {
-                                let _ = sender.send(Request::P(p));
+                                let _ = to_chassis.send(MsgToChassis::Move(p));
                             }
                         }
                     }
-                    Some(&"user") => {
-                        if tokens.len() == 2 {
+                    Some(&"user") => match tokens.len() {
+                        1 => {
+                            let _ = to_lidar.send(MsgToLidar::Send(None));
+                        }
+                        2 => {
                             if let Ok(a) = tokens[1].parse::<Ipv4Addr>() {
-                                *user_address.lock().unwrap() = Some(a);
+                                let _ = to_lidar.send(MsgToLidar::Send(Some(a)));
                             }
                         }
-                    }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
