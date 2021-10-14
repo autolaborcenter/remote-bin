@@ -13,7 +13,7 @@ enum MsgToChassis {
 }
 
 enum MsgToLidar {
-    Check(Commander, ChassisModel, Predictor),
+    Check(ChassisModel, Predictor),
     Send(Option<Ipv4Addr>),
 }
 

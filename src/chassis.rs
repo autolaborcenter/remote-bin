@@ -1,4 +1,5 @@
 ﻿use super::{
+    Commander::*,
     MsgToChassis::{self, *},
     MsgToLidar,
 };
@@ -12,7 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(200);
+
 pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChassis>) {
+    let mut artificial_deadline = Instant::now();
     SupervisorForSingle::<PM1>::new().join(|e| {
         match e {
             Connected(_, driver) => eprintln!("Connected: {}", driver.status()),
@@ -40,9 +44,18 @@ pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChas
                             );
                         }
                         Predict(c, p) => {
-                            let (model, mut predictor) = pm1.predict();
-                            predictor.set_target(p);
-                            let _ = lidar.send(MsgToLidar::Check(c, model, predictor));
+                            let now = Instant::now();
+                            if match c {
+                                Artificial => {
+                                    artificial_deadline = now + ARTIFICIAL_TIMEOUT;
+                                    true
+                                }
+                                Automatic => now > artificial_deadline,
+                            } {
+                                let (model, mut predictor) = pm1.predict();
+                                predictor.set_target(p);
+                                let _ = lidar.send(MsgToLidar::Check(model, predictor));
+                            }
                         }
                         Move(p) => pm1.send((Instant::now(), p)),
                     }
