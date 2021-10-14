@@ -1,11 +1,13 @@
-﻿use super::{
+﻿use crate::MsgToFollower;
+
+use super::{
     Commander::*,
     MsgToChassis::{self, *},
     MsgToLidar,
 };
 use pm1_sdk::{
     driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
-    PM1Status, PM1,
+    PM1Event, PM1Status, PM1,
 };
 use std::{
     sync::mpsc::{Receiver, Sender},
@@ -15,7 +17,11 @@ use std::{
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(200);
 
-pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChassis>) {
+pub(super) fn supervisor(
+    to_lidar: Sender<MsgToLidar>,
+    to_follower: Sender<MsgToFollower>,
+    mail_box: Receiver<MsgToChassis>,
+) {
     let mut artificial_deadline = Instant::now();
     SupervisorForSingle::<PM1>::new().join(|e| {
         match e {
@@ -28,7 +34,11 @@ pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChas
                 eprintln!("Disconnected.");
                 thread::sleep(Duration::from_secs(1));
             }
-            Event(pm1, _) => {
+
+            Event(pm1, e) => {
+                if let Some((time, PM1Event::Odometry(o))) = e {
+                    let _ = to_follower.send(MsgToFollower::Relative(time, o.pose));
+                }
                 while let Ok(msg) = mail_box.try_recv() {
                     match msg {
                         PrintStatus => {
@@ -54,7 +64,7 @@ pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChas
                             } {
                                 let (model, mut predictor) = pm1.predict();
                                 predictor.set_target(p);
-                                let _ = lidar.send(MsgToLidar::Check(model, predictor));
+                                let _ = to_lidar.send(MsgToLidar::Check(model, predictor));
                             }
                         }
                         Move(p) => pm1.send((Instant::now(), p)),

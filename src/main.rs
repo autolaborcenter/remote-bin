@@ -1,5 +1,6 @@
+use parry2d::na::Isometry2;
 use pm1_sdk::model::{ChassisModel, Physical, Predictor};
-use std::{net::Ipv4Addr, sync::mpsc::channel, thread};
+use std::{net::Ipv4Addr, sync::mpsc::channel, thread, time::Instant};
 
 enum Commander {
     Artificial,
@@ -17,24 +18,41 @@ enum MsgToLidar {
     Send(Option<Ipv4Addr>),
 }
 
-mod chassis;
-mod lidar;
+enum MsgToFollower {
+    Absolute(Instant, Isometry2<f32>),
+    Relative(Instant, Isometry2<f32>),
+}
 
-#[cfg(feature = "rtk")]
+mod chassis;
+mod follower;
+mod lidar;
 mod rtk;
 
 fn main() {
     let (to_chassis, for_chassis) = channel();
     let (to_lidar, for_lidar) = channel();
+    let (to_follower, for_follower) = channel();
 
     {
+        // 监控底盘
         let to_lidar = to_lidar.clone();
-        thread::spawn(move || chassis::supervisor(to_lidar, for_chassis));
+        let to_follower = to_follower.clone();
+        thread::spawn(move || chassis::supervisor(to_lidar, to_follower, for_chassis));
     }
-
     {
+        // 监控雷达
         let to_chassis = to_chassis.clone();
         thread::spawn(move || lidar::supervisor(to_chassis, for_lidar));
+    }
+    {
+        // 监控位导
+        let to_follower = to_follower.clone();
+        thread::spawn(move || rtk::supervisor(to_follower));
+    }
+    {
+        // 执行导航任务
+        let to_chassis = to_chassis.clone();
+        thread::spawn(move || follower::task(to_chassis, for_follower));
     }
 
     let mut line = String::new();
