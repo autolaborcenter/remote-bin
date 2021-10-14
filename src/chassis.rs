@@ -39,10 +39,10 @@ pub(super) fn supervisor(lidar: Sender<MsgToLidar>, mail_box: Receiver<MsgToChas
                                 battery_percent, physical.speed, physical.rudder, odometry.s
                             );
                         }
-                        Predict(p) => {
+                        Predict(c, p) => {
                             let (model, mut predictor) = pm1.predict();
                             predictor.set_target(p);
-                            let _ = lidar.send(MsgToLidar::Check(model, predictor));
+                            let _ = lidar.send(MsgToLidar::Check(c, model, predictor));
                         }
                         Move(p) => pm1.send((Instant::now(), p)),
                     }

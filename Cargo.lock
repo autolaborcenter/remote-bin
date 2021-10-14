@@ -261,6 +261,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pose-filter"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,6 +298,7 @@ dependencies = [
  "lidar-faselase",
  "parry2d",
  "pm1-sdk",
+ "pose-filter",
  "rtk-ins570",
 ]
 

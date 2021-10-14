@@ -1,14 +1,19 @@
 use pm1_sdk::model::{ChassisModel, Physical, Predictor};
 use std::{net::Ipv4Addr, sync::mpsc::channel, thread};
 
+enum Commander {
+    Artificial,
+    Automatic,
+}
+
 enum MsgToChassis {
     PrintStatus,
-    Predict(Physical),
+    Predict(Commander, Physical),
     Move(Physical),
 }
 
 enum MsgToLidar {
-    Check(ChassisModel, Predictor),
+    Check(Commander, ChassisModel, Predictor),
     Send(Option<Ipv4Addr>),
 }
 
@@ -51,7 +56,7 @@ fn main() {
                                     println!("! 127");
                                     MsgToChassis::Move(p)
                                 } else {
-                                    MsgToChassis::Predict(p)
+                                    MsgToChassis::Predict(Commander::Artificial, p)
                                 });
                             }
                         }

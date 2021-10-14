@@ -1,4 +1,5 @@
 ﻿use super::{
+    Commander::*,
     MsgToChassis,
     MsgToLidar::{self, *},
 };
@@ -6,7 +7,7 @@ use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     FrameCollector, Point, D10,
 };
-use pm1_sdk::model::{Odometry, Physical};
+use pm1_sdk::model::Physical;
 use std::{
     f32::consts::FRAC_PI_8,
     f64::consts::PI,
@@ -18,6 +19,8 @@ use std::{
 };
 
 mod collision;
+
+const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
@@ -46,6 +49,7 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     let mut address = None;
     let mut send_time = Instant::now() + Duration::from_millis(100);
+    let mut artificial_deadline = Instant::now();
     let mut update_filter = 2;
 
     SupervisorForMultiple::<D10>::new().join(2, |e| {
@@ -88,37 +92,31 @@ pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgTo
                 // 响应请求
                 while let Ok(msg) = mail_box.try_recv() {
                     match msg {
-                        Check(model, predictor) => {
-                            const PERIOD: Duration = Duration::from_millis(40);
-                            const PERIOD_SEC: f32 = 0.04;
-
-                            let target = predictor.target;
-                            let mut pose = Odometry::ZERO;
-                            let mut time = Duration::ZERO;
-                            let mut size = 1.0;
-                            for status in predictor {
-                                time += PERIOD;
-                                if time > Duration::from_secs(2) {
-                                    let _ = chassis.send(MsgToChassis::Move(target));
-                                    println!("! 127");
-                                    break;
+                        Check(commander, model, predictor) => {
+                            let now = Instant::now();
+                            if match commander {
+                                Artificial => {
+                                    artificial_deadline = now + ARTIFICIAL_TIMEOUT;
+                                    true
                                 }
-                                let delta = model.physical_to_odometry(Physical {
-                                    speed: status.speed * PERIOD_SEC,
-                                    ..status
-                                });
-                                size += delta.s;
-                                pose += delta;
-                                if collision::detect(&frame, pose.pose, size) {
-                                    let k = time.as_secs_f32() / 2.0;
-                                    if pose.s > 0.15 || pose.a > FRAC_PI_8 {
-                                        let _ = chassis.send(MsgToChassis::Move(Physical {
-                                            speed: target.speed * k,
-                                            ..target
-                                        }));
+                                Automatic => now > artificial_deadline,
+                            } {
+                                let target = predictor.target;
+                                match collision::detect(&frame, model, predictor) {
+                                    Some((time, odometry)) => {
+                                        let k = time.as_secs_f32() / 2.0;
+                                        if odometry.s > 0.15 || odometry.a > FRAC_PI_8 {
+                                            let _ = chassis.send(MsgToChassis::Move(Physical {
+                                                speed: target.speed * k,
+                                                ..target
+                                            }));
+                                        }
+                                        println!("! {}", (k * 25.5) as u8);
                                     }
-                                    println!("! {}", (k * 25.5) as u8);
-                                    break;
+                                    None => {
+                                        let _ = chassis.send(MsgToChassis::Move(target));
+                                        println!("! 127");
+                                    }
                                 }
                             }
                         }

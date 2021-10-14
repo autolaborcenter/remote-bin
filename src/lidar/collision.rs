@@ -5,8 +5,39 @@ use parry2d::{
     query::PointQuery,
     shape::ConvexPolygon,
 };
+use pm1_sdk::model::{ChassisModel, Odometry, Physical, Predictor};
+use std::time::Duration;
 
-pub(super) fn detect(frame: &[FrameCollector], pose: Isometry2<f32>, size: f32) -> bool {
+pub(super) fn detect(
+    frame: &[FrameCollector],
+    model: ChassisModel,
+    predictor: Predictor,
+) -> Option<(Duration, Odometry)> {
+    const PERIOD: Duration = Duration::from_millis(40);
+    const PERIOD_SEC: f32 = 0.04;
+
+    let mut pose = Odometry::ZERO;
+    let mut time = Duration::ZERO;
+    let mut size = 1.0;
+    for status in predictor {
+        time += PERIOD;
+        if time > Duration::from_secs(2) {
+            return None;
+        }
+        let delta = model.physical_to_odometry(Physical {
+            speed: status.speed * PERIOD_SEC,
+            ..status
+        });
+        size += delta.s;
+        pose += delta;
+        if check(&frame, pose.pose, size) {
+            return Some((time, pose));
+        }
+    }
+    panic!("Impossible!");
+}
+
+fn check(frame: &[FrameCollector], pose: Isometry2<f32>, size: f32) -> bool {
     let outline = ROBOT_OUTLINE
         .iter()
         .map(|p| pose * transform(*p, size))
