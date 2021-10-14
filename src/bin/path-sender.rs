@@ -51,11 +51,12 @@ fn main() {
                 }
                 match controller.read(word) {
                     Ok(p) => {
+                        const HEAD: &[u8; 12] = b"gps routing\0";
                         let len = p.len() as u16;
-                        let mut buf = Vec::new();
+                        let mut buf = Vec::with_capacity(HEAD.len() + len as usize * 8);
 
                         unsafe {
-                            let _ = write!(&len => buf);
+                            let _ = write!(HEAD => buf);
                             for p in p.into_iter() {
                                 let WGS84 {
                                     latitude,
