@@ -1,51 +1,25 @@
-﻿use async_std::{
-    net::UdpSocket,
-    sync::{Arc, Mutex},
-    task,
-};
-use remote_bin::*;
+﻿use async_std::{channel::unbounded, net::UdpSocket, task};
+use remote_bin::{launch, Command, Odometry, PM1Status, Physical};
 use std::net::SocketAddr;
+
+enum Event {
+    ShowRequest,
+    UpdateUser(Option<SocketAddr>),
+    Internal(remote_bin::Event),
+    Exit,
+}
 
 #[async_std::main]
 async fn main() {
-    let (command, event) = launch(false);
-    let address = Arc::new(Mutex::new(None));
-    let status = Arc::new(Mutex::new((
-        PM1Status {
-            battery_percent: 0,
-            power_switch: false,
-            physical: Physical::ZERO,
-        },
-        Odometry::ZERO,
-        0f32,
-    )));
-    {
-        let address = address.clone();
-        let status = status.clone();
-        task::spawn(async move {
-            let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-            while let Ok(e) = event.recv().await {
-                use Event::*;
-                match e {
-                    ChassisStatusUpdated(e) => match e {
-                        PM1Event::Battery(b) => status.lock().await.0.battery_percent = b,
-                        PM1Event::PowerSwitch(b) => status.lock().await.0.power_switch = b,
-                        PM1Event::Physical(p) => status.lock().await.0.physical = p,
-                        PM1Event::Odometry(delta) => status.lock().await.1 += delta,
-                    },
-                    LidarFrame(buf) => {
-                        if let Some(a) = *address.lock().await {
-                            let _ = socket.send_to(buf.as_slice(), a).await;
-                        }
-                    }
-                    DetectCollision(risk) => {
-                        status.lock().await.2 = risk;
-                    }
-                }
-            }
-        });
-    }
-    loop {
+    let (command, events) = launch(false);
+    let (s0, receiver) = unbounded();
+    let s1 = s0.clone();
+    task::spawn(async move {
+        while let Ok(e) = events.recv().await {
+            let _ = s0.send(Event::Internal(e)).await;
+        }
+    });
+    task::spawn(async move {
         let mut line = String::new();
         loop {
             line.clear();
@@ -55,19 +29,7 @@ async fn main() {
                     match tokens.get(0) {
                         Some(&"show") => {
                             if tokens.len() == 1 {
-                                let (
-                                    PM1Status {
-                                        battery_percent,
-                                        power_switch: _,
-                                        physical: Physical { speed, rudder },
-                                    },
-                                    Odometry { s, a: _, pose: _ },
-                                    risk,
-                                ) = *status.lock().await;
-                                println!(
-                                    "S {} {} {} {} \n ! {}",
-                                    battery_percent, speed, rudder, s, risk
-                                );
+                                let _ = s1.send(Event::ShowRequest).await;
                             }
                         }
                         Some(&"move") => {
@@ -79,11 +41,11 @@ async fn main() {
                         }
                         Some(&"user") => match tokens.len() {
                             1 => {
-                                *address.lock().await = None;
+                                let _ = s1.send(Event::UpdateUser(None)).await;
                             }
                             2 => {
                                 if let Ok(a) = tokens[1].parse::<SocketAddr>() {
-                                    *address.lock().await = Some(a);
+                                    let _ = s1.send(Event::UpdateUser(Some(a))).await;
                                 }
                             }
                             _ => {}
@@ -91,8 +53,51 @@ async fn main() {
                         _ => {}
                     }
                 }
-                Err(_) => return,
+                Err(_) => {
+                    let _ = s1.send(Event::Exit).await;
+                }
             }
+        }
+    });
+
+    let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+    let mut address = None;
+    let mut status = PM1Status {
+        battery_percent: 0,
+        power_switch: false,
+        physical: Physical::ZERO,
+    };
+    let mut odometer = (0.0, 0.0);
+    let mut _pose = Odometry::ZERO.pose;
+    let mut risk = 0.0;
+    loop {
+        match receiver.recv().await {
+            Ok(Event::ShowRequest) => {
+                println!(
+                    "S {} {} {} {}\n ! {}",
+                    status.battery_percent,
+                    status.physical.speed,
+                    status.physical.rudder,
+                    odometer.0,
+                    risk
+                );
+            }
+            Ok(Event::UpdateUser(a)) => address = a,
+            Ok(Event::Internal(e)) => {
+                use remote_bin::Event::*;
+                match e {
+                    ChassisStatusUpdated(s) => status = s,
+                    ChassisOdometerUpdated(s, a) => odometer = (s, a),
+                    PoseUpdated(p) => _pose = p,
+                    LidarFrameEncoded(buf) => {
+                        if let Some(a) = address {
+                            let _ = socket.send_to(buf.as_slice(), a).await;
+                        }
+                    }
+                    CollisionDetected(r) => risk = r,
+                }
+            }
+            Ok(Event::Exit) | Err(_) => break,
         }
     }
 }

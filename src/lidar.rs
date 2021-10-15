@@ -1,4 +1,4 @@
-﻿use super::{chassis::Message as Chassis, send_anyway, Event};
+﻿use super::{chassis::Message as Chassis, macros::send_anyway, Event};
 use async_std::channel::{Receiver, Sender};
 use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
@@ -94,11 +94,11 @@ pub(super) fn supervisor(
                                 target.speed *= time.as_secs_f32() / 2.0;
                                 send_anyway!(Chassis::Move(target) => chassis);
                             }
-                            send_anyway!(Event::DetectCollision((2.0-time.as_secs_f32())/size) => app);
+                            send_anyway!(Event::CollisionDetected((2.0-time.as_secs_f32())/size) => app);
                         }
                         None => {
                             send_anyway!(Chassis::Move(target) => chassis);
-                            send_anyway!(Event::DetectCollision(0.0) => app);
+                            send_anyway!(Event::CollisionDetected(0.0) => app);
                         }
                     }
                 }
@@ -109,7 +109,7 @@ pub(super) fn supervisor(
                     let _ = buf.write_all(&[255]);
                     frame[1].write_to(&mut buf);
                     frame[0].write_to(&mut buf);
-                    send_anyway!(Event::LidarFrame(buf) => app);
+                    send_anyway!(Event::LidarFrameEncoded(buf) => app);
                 }
             }
             ConnectFailed { current, target } => {

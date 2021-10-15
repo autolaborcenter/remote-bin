@@ -1,4 +1,4 @@
-﻿use super::{lidar::Message as Lidar, send_anyway, tracker::Message as Tracker, Event};
+﻿use super::{lidar::Message as Lidar, macros::send_anyway, tracker::Message as Tracker, Event};
 use async_std::channel::{Receiver, Sender};
 use pm1_sdk::{
     driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
@@ -43,8 +43,9 @@ pub(super) fn supervisor(
                     if let PM1Event::Odometry(delta) = e {
                         pose *= delta.pose;
                         send_anyway!(Tracker::Relative(time, pose) => tracker);
+                    } else {
+                        send_anyway!(Event::ChassisStatusUpdated(*pm1.status()) => app);
                     }
-                    send_anyway!(Event::ChassisStatusUpdated(e) => app);
                 }
                 while let Ok(msg) = mail_box.try_recv() {
                     use Message::*;

@@ -1,4 +1,4 @@
-﻿use super::chassis::Message as Chassis;
+﻿use super::{chassis::Message as Chassis, Event};
 use async_std::channel::{Receiver, Sender};
 use parry2d::na::Isometry2;
 use path_follower::Controller;
@@ -15,28 +15,33 @@ pub(super) enum Message {
     Pause(bool),
 }
 
-pub(super) async fn task(to_chassis: Sender<Chassis>, mail_box: Receiver<Message>) {
+pub(super) async fn task(
+    chassis: Sender<Chassis>,
+    app: Sender<Event>,
+    mail_box: Receiver<Message>,
+) {
     let mut controller = Controller::new("path").unwrap();
     let mut filter = InterpolationAndPredictionFilter::new();
     let mut pause = false;
+
     while let Ok(msg) = mail_box.recv().await {
         use Message::*;
         match msg {
             Absolute(time, pose) => {
-                if let Some(proportion) =
-                    controller.put_pose(&filter.update(PoseType::Absolute, time, pose))
-                {
+                let pose = filter.update(PoseType::Absolute, time, pose);
+                let _ = app.send(Event::PoseUpdated(pose)).await;
+                if let Some(proportion) = controller.put_pose(&pose) {
                     if !pause {
-                        let _ = to_chassis.send(control(proportion)).await;
+                        let _ = chassis.send(control(proportion)).await;
                     }
                 }
             }
             Relative(time, pose) => {
-                if let Some(proportion) =
-                    controller.put_pose(&filter.update(PoseType::Relative, time, pose))
-                {
+                let pose = filter.update(PoseType::Relative, time, pose);
+                let _ = app.send(Event::PoseUpdated(pose)).await;
+                if let Some(proportion) = controller.put_pose(&pose) {
                     if !pause {
-                        let _ = to_chassis.send(control(proportion)).await;
+                        let _ = chassis.send(control(proportion)).await;
                     }
                 }
             }
