@@ -9,7 +9,7 @@ use pm1_sdk::model::Physical;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use std::sync::mpsc::{Receiver, Sender};
 
-pub(super) fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFollower>) {
+pub fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFollower>) {
     let mut controller = Controller::new("path").unwrap();
     let mut filter = InterpolationAndPredictionFilter::new();
     let mut pause = false;

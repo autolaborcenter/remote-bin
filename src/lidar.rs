@@ -19,7 +19,7 @@ use std::{
 
 mod collision;
 
-pub(super) fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
+pub fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {

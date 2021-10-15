@@ -17,7 +17,7 @@ use std::{
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(200);
 
-pub(super) fn supervisor(
+pub fn supervisor(
     to_lidar: Sender<MsgToLidar>,
     to_follower: Sender<MsgToFollower>,
     mail_box: Receiver<MsgToChassis>,

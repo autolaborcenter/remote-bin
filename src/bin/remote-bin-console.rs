@@ -1,36 +1,6 @@
-use parry2d::na::Isometry2;
-use pm1_sdk::model::{ChassisModel, Physical, Predictor};
-use std::{net::Ipv4Addr, sync::mpsc::channel, thread, time::Instant};
-
-enum Commander {
-    Artificial,
-    Automatic,
-}
-
-enum MsgToChassis {
-    PrintStatus,
-    Predict(Commander, Physical),
-    Move(Physical),
-}
-
-enum MsgToLidar {
-    Check(ChassisModel, Predictor),
-    Send(Option<Ipv4Addr>),
-}
-
-enum MsgToFollower {
-    Absolute(Instant, Isometry2<f32>),
-    Relative(Instant, Isometry2<f32>),
-    Record(String),
-    Follow(String),
-    Cancel,
-    Pause(bool),
-}
-
-mod chassis;
-mod follower;
-mod lidar;
-mod rtk;
+﻿use pm1_sdk::model::Physical;
+use remote_bin::*;
+use std::{net::Ipv4Addr, sync::mpsc::channel, thread};
 
 fn main() {
     let (to_chassis, for_chassis) = channel();

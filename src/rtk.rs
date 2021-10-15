@@ -4,7 +4,7 @@ use pm1_sdk::driver::{SupersivorEventForSingle::*, SupervisorForSingle};
 use rtk_ins570::{Solution, RTK};
 use std::{sync::mpsc::Sender, thread, time::Duration};
 
-pub(super) fn supervisor(to_follower: Sender<MsgToFollower>) {
+pub fn supervisor(to_follower: Sender<MsgToFollower>) {
     SupervisorForSingle::<RTK>::new().join(|e| {
         match e {
             Connected(k, _) => eprintln!("RTK at COM {}", k),
