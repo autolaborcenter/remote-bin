@@ -1,28 +1,27 @@
-﻿use super::{
-    MsgToChassis,
-    MsgToLidar::{self, *},
-};
-use async_std::{
-    channel::{Receiver, Sender},
-    task::block_on,
-};
+﻿use super::{chassis::Message as Chassis, send_anyway, Event};
+use async_std::channel::{Receiver, Sender};
 use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     FrameCollector, Point, D10,
 };
-use pm1_sdk::model::Physical;
+use pm1_sdk::model::{ChassisModel, Predictor};
 use std::{
     f32::consts::FRAC_PI_8,
     f64::consts::PI,
     io::Write,
-    net::{IpAddr, SocketAddr, UdpSocket},
     thread,
     time::{Duration, Instant},
 };
 
 mod collision;
 
-pub fn supervisor(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
+pub(super) struct Message(pub ChassisModel, pub Predictor);
+
+pub(super) fn supervisor(
+    chassis: Sender<Chassis>,
+    app: Sender<Event>,
+    mail_box: Receiver<Message>,
+) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {
@@ -46,8 +45,6 @@ pub fn supervisor(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLida
         },
     ];
 
-    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-    let mut address = None;
     let mut send_time = Instant::now() + Duration::from_millis(100);
     let mut update_filter = 2;
 
@@ -89,46 +86,30 @@ pub fn supervisor(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLida
                     }
                 }
                 // 响应请求
-                while let Ok(msg) = mail_box.try_recv() {
-                    match msg {
-                        Check(model, predictor) => {
-                            let target = predictor.target;
-                            match collision::detect(&frame, model, predictor) {
-                                Some((time, odometry)) => {
-                                    let k = time.as_secs_f32() / 2.0;
-                                    if odometry.s > 0.15 || odometry.a > FRAC_PI_8 {
-                                        let _ = block_on(async {
-                                            to_chassis
-                                                .send(MsgToChassis::Move(Physical {
-                                                    speed: target.speed * k,
-                                                    ..target
-                                                }))
-                                                .await
-                                        });
-                                    }
-                                    println!("! {}", (k * 25.5) as u8);
-                                }
-                                None => {
-                                    let _ = block_on(async {
-                                        to_chassis.send(MsgToChassis::Move(target)).await
-                                    });
-                                    println!("! 127");
-                                }
+                while let Ok(Message(model, predictor)) = mail_box.try_recv() {
+                    let mut target = predictor.target;
+                    match collision::detect(&frame, model, predictor) {
+                        Some((time, odometry, size)) => {
+                            if odometry.s > 0.15 || odometry.a > FRAC_PI_8 {
+                                target.speed *= time.as_secs_f32() / 2.0;
+                                send_anyway!(Chassis::Move(target) => chassis);
                             }
+                            send_anyway!(Event::DetectCollision((2.0-time.as_secs_f32())/size) => app);
                         }
-                        Send(a) => address = a.map(|a| SocketAddr::new(IpAddr::V4(a), 50005)),
+                        None => {
+                            send_anyway!(Chassis::Move(target) => chassis);
+                            send_anyway!(Event::DetectCollision(0.0) => app);
+                        }
                     }
                 }
                 // 发送
-                if let Some(a) = address {
-                    if now >= send_time {
-                        send_time = now + Duration::from_millis(100);
-                        let mut buf = Vec::new();
-                        let _ = buf.write_all(&[255]);
-                        frame[1].write_to(&mut buf);
-                        frame[0].write_to(&mut buf);
-                        let _ = socket.send_to(buf.as_slice(), a);
-                    }
+                if now >= send_time {
+                    send_time = now + Duration::from_millis(100);
+                    let mut buf = Vec::new();
+                    let _ = buf.write_all(&[255]);
+                    frame[1].write_to(&mut buf);
+                    frame[0].write_to(&mut buf);
+                    send_anyway!(Event::LidarFrame(buf) => app);
                 }
             }
             ConnectFailed { current, target } => {

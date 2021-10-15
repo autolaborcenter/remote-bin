@@ -1,17 +1,9 @@
-﻿use crate::MsgToFollower;
-
-use super::{
-    Commander::*,
-    MsgToChassis::{self, *},
-    MsgToLidar,
-};
-use async_std::{
-    channel::{Receiver, Sender},
-    task::block_on,
-};
+﻿use super::{lidar::Message as Lidar, send_anyway, tracker::Message as Tracker, Event};
+use async_std::channel::{Receiver, Sender};
 use pm1_sdk::{
     driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
-    PM1Event, PM1Status, PM1,
+    model::{Odometry, Physical},
+    PM1Event, PM1,
 };
 use std::{
     thread,
@@ -20,12 +12,20 @@ use std::{
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(200);
 
-pub fn supervisor(
-    to_lidar: Sender<MsgToLidar>,
-    to_follower: Sender<MsgToFollower>,
-    mail_box: Receiver<MsgToChassis>,
+pub(super) enum Message {
+    PredictArtificial(Physical),
+    PredictAutomatic(Physical),
+    Move(Physical),
+}
+
+pub(super) fn supervisor(
+    lidar: Sender<Lidar>,
+    tracker: Sender<Tracker>,
+    app: Sender<Event>,
+    mail_box: Receiver<Message>,
 ) {
     let mut artificial_deadline = Instant::now();
+    let mut pose = Odometry::ZERO.pose;
     SupervisorForSingle::<PM1>::new().join(|e| {
         match e {
             Connected(_, driver) => eprintln!("Connected: {}", driver.status()),
@@ -39,41 +39,23 @@ pub fn supervisor(
             }
 
             Event(pm1, e) => {
-                if let Some((time, PM1Event::Odometry(o))) = e {
-                    let _ = block_on(async {
-                        to_follower
-                            .send(MsgToFollower::Relative(time, o.pose))
-                            .await
-                    });
+                if let Some((time, e)) = e {
+                    if let PM1Event::Odometry(delta) = e {
+                        pose *= delta.pose;
+                        send_anyway!(Tracker::Relative(time, pose) => tracker);
+                    }
+                    send_anyway!(Event::ChassisStatusUpdated(e) => app);
                 }
                 while let Ok(msg) = mail_box.try_recv() {
+                    use Message::*;
                     match msg {
-                        PrintStatus => {
-                            let PM1Status {
-                                battery_percent,
-                                power_switch: _,
-                                physical,
-                                odometry,
-                            } = pm1.status();
-                            println!(
-                                "S {} {} {} {}",
-                                battery_percent, physical.speed, physical.rudder, odometry.s
-                            );
+                        PredictArtificial(p) => {
+                            artificial_deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
+                            send_anyway!(predict(pm1, p) => lidar);
                         }
-                        Predict(c, p) => {
-                            let now = Instant::now();
-                            if match c {
-                                Artificial => {
-                                    artificial_deadline = now + ARTIFICIAL_TIMEOUT;
-                                    true
-                                }
-                                Automatic => now > artificial_deadline,
-                            } {
-                                let (model, mut predictor) = pm1.predict();
-                                predictor.set_target(p);
-                                let _ = block_on(async {
-                                    to_lidar.send(MsgToLidar::Check(model, predictor)).await
-                                });
+                        PredictAutomatic(p) => {
+                            if Instant::now() > artificial_deadline {
+                                send_anyway!(predict(pm1, p) => lidar);
                             }
                         }
                         Move(p) => pm1.send((Instant::now(), p)),
@@ -83,4 +65,10 @@ pub fn supervisor(
         };
         true
     });
+}
+
+fn predict(chassis: &PM1, target: Physical) -> Lidar {
+    let (model, mut predictor) = chassis.predict();
+    predictor.set_target(target);
+    Lidar(model, predictor)
 }

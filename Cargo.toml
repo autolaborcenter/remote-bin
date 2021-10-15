@@ -11,7 +11,7 @@ lidar-faselase = { path = "../lidar-faselase" }
 rtk-ins570 = { path = "../rtk-ins570" }
 pose-filter = { path = "../pose-filter" }
 path-follower = { path = "../path-follower" }
-async-std = "*"
+async-std = { version = "*", features = ["attributes"] }
 parry2d = "*"
 
 # 减小二进制体积

@@ -12,7 +12,7 @@ pub(super) fn detect(
     frame: &[FrameCollector],
     model: ChassisModel,
     predictor: Predictor,
-) -> Option<(Duration, Odometry)> {
+) -> Option<(Duration, Odometry, f32)> {
     const PERIOD: Duration = Duration::from_millis(40);
     const PERIOD_SEC: f32 = 0.04;
 
@@ -31,7 +31,7 @@ pub(super) fn detect(
         size += delta.s;
         pose += delta;
         if check(&frame, pose.pose, size) {
-            return Some((time, pose));
+            return Some((time, pose, size));
         }
     }
     panic!("Impossible!");

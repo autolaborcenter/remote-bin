@@ -1,19 +1,26 @@
-﻿use crate::Commander;
-
-use super::{
-    MsgToChassis,
-    MsgToFollower::{self, *},
-};
+﻿use super::chassis::Message as Chassis;
 use async_std::channel::{Receiver, Sender};
+use parry2d::na::Isometry2;
 use path_follower::Controller;
 use pm1_sdk::model::Physical;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
+use std::time::Instant;
 
-pub async fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFollower>) {
+pub(super) enum Message {
+    Absolute(Instant, Isometry2<f32>),
+    Relative(Instant, Isometry2<f32>),
+    Record(String),
+    Follow(String),
+    Cancel,
+    Pause(bool),
+}
+
+pub(super) async fn task(to_chassis: Sender<Chassis>, mail_box: Receiver<Message>) {
     let mut controller = Controller::new("path").unwrap();
     let mut filter = InterpolationAndPredictionFilter::new();
     let mut pause = false;
     while let Ok(msg) = mail_box.recv().await {
+        use Message::*;
         match msg {
             Absolute(time, pose) => {
                 if let Some(proportion) =
@@ -53,12 +60,9 @@ pub async fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFoll
     }
 }
 
-fn control(proportion: f32) -> MsgToChassis {
-    MsgToChassis::Predict(
-        Commander::Automatic,
-        Physical {
-            speed: 0.25,
-            rudder: -2.0 * (proportion - 0.5),
-        },
-    )
+fn control(proportion: f32) -> Chassis {
+    Chassis::PredictAutomatic(Physical {
+        speed: 0.25,
+        rudder: -2.0 * (proportion - 0.5),
+    })
 }
