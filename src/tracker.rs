@@ -4,31 +4,34 @@ use super::{
     MsgToChassis,
     MsgToFollower::{self, *},
 };
+use async_std::channel::{Receiver, Sender};
 use path_follower::Controller;
 use pm1_sdk::model::Physical;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
-use std::sync::mpsc::{Receiver, Sender};
 
-pub fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFollower>) {
+pub async fn task(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToFollower>) {
     let mut controller = Controller::new("path").unwrap();
     let mut filter = InterpolationAndPredictionFilter::new();
     let mut pause = false;
-
-    for msg in mail_box {
-        let mut control = |&pose| {
-            if let Some(proportion) = controller.put_pose(&pose) {
-                if !pause {
-                    let _ = to_chassis.send(control(proportion));
-                }
-            }
-        };
-
+    while let Ok(msg) = mail_box.recv().await {
         match msg {
             Absolute(time, pose) => {
-                control(&filter.update(PoseType::Absolute, time, pose));
+                if let Some(proportion) =
+                    controller.put_pose(&filter.update(PoseType::Absolute, time, pose))
+                {
+                    if !pause {
+                        let _ = to_chassis.send(control(proportion)).await;
+                    }
+                }
             }
             Relative(time, pose) => {
-                control(&filter.update(PoseType::Relative, time, pose));
+                if let Some(proportion) =
+                    controller.put_pose(&filter.update(PoseType::Relative, time, pose))
+                {
+                    if !pause {
+                        let _ = to_chassis.send(control(proportion)).await;
+                    }
+                }
             }
             Record(name) => {
                 if let Err(e) = controller.record_to(name.as_str()) {

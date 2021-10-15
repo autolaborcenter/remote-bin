@@ -5,12 +5,15 @@ use super::{
     MsgToChassis::{self, *},
     MsgToLidar,
 };
+use async_std::{
+    channel::{Receiver, Sender},
+    task::block_on,
+};
 use pm1_sdk::{
     driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
     PM1Event, PM1Status, PM1,
 };
 use std::{
-    sync::mpsc::{Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
@@ -37,7 +40,11 @@ pub fn supervisor(
 
             Event(pm1, e) => {
                 if let Some((time, PM1Event::Odometry(o))) = e {
-                    let _ = to_follower.send(MsgToFollower::Relative(time, o.pose));
+                    let _ = block_on(async {
+                        to_follower
+                            .send(MsgToFollower::Relative(time, o.pose))
+                            .await
+                    });
                 }
                 while let Ok(msg) = mail_box.try_recv() {
                     match msg {
@@ -64,7 +71,9 @@ pub fn supervisor(
                             } {
                                 let (model, mut predictor) = pm1.predict();
                                 predictor.set_target(p);
-                                let _ = to_lidar.send(MsgToLidar::Check(model, predictor));
+                                let _ = block_on(async {
+                                    to_lidar.send(MsgToLidar::Check(model, predictor)).await
+                                });
                             }
                         }
                         Move(p) => pm1.send((Instant::now(), p)),

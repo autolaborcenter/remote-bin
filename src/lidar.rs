@@ -2,6 +2,10 @@
     MsgToChassis,
     MsgToLidar::{self, *},
 };
+use async_std::{
+    channel::{Receiver, Sender},
+    task::block_on,
+};
 use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     FrameCollector, Point, D10,
@@ -12,14 +16,13 @@ use std::{
     f64::consts::PI,
     io::Write,
     net::{IpAddr, SocketAddr, UdpSocket},
-    sync::mpsc::{Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
 
 mod collision;
 
-pub fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
+pub fn supervisor(to_chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>) {
     let mut indexer = Indexer::new(2);
     let mut frame = [
         FrameCollector {
@@ -94,15 +97,21 @@ pub fn supervisor(chassis: Sender<MsgToChassis>, mail_box: Receiver<MsgToLidar>)
                                 Some((time, odometry)) => {
                                     let k = time.as_secs_f32() / 2.0;
                                     if odometry.s > 0.15 || odometry.a > FRAC_PI_8 {
-                                        let _ = chassis.send(MsgToChassis::Move(Physical {
-                                            speed: target.speed * k,
-                                            ..target
-                                        }));
+                                        let _ = block_on(async {
+                                            to_chassis
+                                                .send(MsgToChassis::Move(Physical {
+                                                    speed: target.speed * k,
+                                                    ..target
+                                                }))
+                                                .await
+                                        });
                                     }
                                     println!("! {}", (k * 25.5) as u8);
                                 }
                                 None => {
-                                    let _ = chassis.send(MsgToChassis::Move(target));
+                                    let _ = block_on(async {
+                                        to_chassis.send(MsgToChassis::Move(target)).await
+                                    });
                                     println!("! 127");
                                 }
                             }

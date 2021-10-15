@@ -1,11 +1,12 @@
-﻿use pm1_sdk::model::Physical;
+﻿use async_std::{channel, task};
+use pm1_sdk::model::Physical;
 use remote_bin::*;
-use std::{net::Ipv4Addr, sync::mpsc::channel, thread};
+use std::{net::Ipv4Addr, thread};
 
 fn main() {
-    let (to_chassis, for_chassis) = channel();
-    let (to_lidar, for_lidar) = channel();
-    let (to_follower, for_follower) = channel();
+    let (to_chassis, for_chassis) = channel::unbounded();
+    let (to_lidar, for_lidar) = channel::unbounded();
+    let (to_follower, for_follower) = channel::unbounded();
     let rtk = false;
 
     {
@@ -23,7 +24,7 @@ fn main() {
         thread::spawn(move || rtk::supervisor(to_follower));
         // 执行导航任务
         let to_chassis = to_chassis.clone();
-        thread::spawn(move || follower::task(to_chassis, for_follower));
+        task::spawn(async move { tracker::task(to_chassis, for_follower).await });
     }
 
     let mut line = String::new();

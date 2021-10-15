@@ -3,9 +3,11 @@ use pm1_sdk::model::{ChassisModel, Physical, Predictor};
 use std::{net::Ipv4Addr, time::Instant};
 
 pub mod chassis;
-pub mod follower;
 pub mod lidar;
 pub mod rtk;
+pub mod tracker;
+
+pub extern crate async_std;
 
 pub enum Commander {
     Artificial,
