@@ -18,7 +18,7 @@ pub(super) fn detect(frame: &[FrameCollector], trajectory: Trajectory) -> Option
         size += dp.s;
         pose += dp;
         if check(&frame, pose.pose, size) {
-            return Some(CollisionInfo(time, pose, size));
+            return Some(CollisionInfo(time, pose, 1.0 / size));
         }
     }
     panic!("Impossible!");

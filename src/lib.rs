@@ -2,6 +2,7 @@ use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
 };
+use macros::*;
 use parry2d::na::Isometry2;
 use std::time::Duration;
 
@@ -16,6 +17,8 @@ pub use pm1_sdk::{
     model::{Odometry, Physical},
     PM1Status,
 };
+
+use crate::lidar::CollisionInfo;
 
 pub enum Command {
     Move(Physical),
@@ -41,7 +44,32 @@ pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
     };
     let (to_chassis, chassis) = chassis::supervisor();
     let (to_lidar, lidar) = lidar::supervisor();
+    let (for_extern, command) = unbounded();
+    let (event, to_extern) = unbounded();
 
+    task::spawn(async move {
+        while let Ok(e) = command.recv().await {
+            use Command::*;
+            match e {
+                Move(p) => {
+                    if let Some(tr) = call!(to_chassis; chassis::Command::PredictArtificial, p) {
+                        if let Some(ci) = call!(to_lidar; lidar::Command, tr) {
+                            match ci {
+                                Some(CollisionInfo(time, odometer, p)) => {}
+                                None => {
+                                    let _ = to_chassis.send(chassis::Command::Move(p)).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                Track(name) => {}
+                Record(name) => {}
+                Pause(bool) => {}
+                Stop => {}
+            }
+        }
+    });
     task::spawn(async move {
         while let Ok(e) = rtk.recv().await {
             use rtk::Event::*;
@@ -74,7 +102,7 @@ pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
         }
     });
 
-    todo!()
+    (for_extern, to_extern)
 }
 
 mod macros {
@@ -84,5 +112,18 @@ mod macros {
         };
     }
 
-    pub(crate) use send_anyway;
+    macro_rules! call {
+        ($sender:expr; $command:expr, $value:expr) => {{
+            let mut result = None;
+            let (sender, receiver) = async_std::channel::bounded(1);
+            if let Ok(_) = (&$sender).send($command($value, sender)).await {
+                while let Ok(r) = receiver.recv().await {
+                    result = Some(r);
+                }
+            }
+            result
+        }};
+    }
+
+    pub(crate) use {call, send_anyway};
 }

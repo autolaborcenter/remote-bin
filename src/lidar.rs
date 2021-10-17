@@ -16,9 +16,9 @@ use std::{
 
 mod collision;
 
-pub(super) struct CollisionInfo(Duration, Odometry, f32);
+pub(super) struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
-pub(super) type Command = (Trajectory, Sender<Option<CollisionInfo>>);
+pub(super) struct Command(pub Trajectory, pub Sender<Option<CollisionInfo>>);
 
 pub(super) enum Event {
     Connected,
@@ -26,10 +26,8 @@ pub(super) enum Event {
     FrameEncoded(Vec<u8>),
 }
 
-// pub(super) struct Message(pub ChassisModel, pub Predictor);
-
 pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
-    let (for_extern, command) = unbounded::<Command>();
+    let (for_extern, command) = unbounded();
     let (event, to_extern) = unbounded();
     task::spawn_blocking(move || {
         let mut indexer = Indexer::new(2);
@@ -100,7 +98,7 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
                     while let Ok(tr) = command.try_recv() {
                         trajectory = Some(tr);
                     }
-                    if let Some((tr, r)) = trajectory {
+                    if let Some(Command(tr, r)) = trajectory {
                         send_anyway!(collision::detect(&frame, tr) => r);
                     }
                     // 发送
@@ -113,7 +111,10 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
                         send_anyway!(Event::FrameEncoded(buf) => event);
                     }
                 }
-                ConnectFailed { current, target } => {
+                ConnectFailed {
+                    current: _,
+                    target: _,
+                } => {
                     thread::sleep(Duration::from_secs(1));
                 }
             }
