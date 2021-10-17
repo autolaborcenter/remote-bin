@@ -3,9 +3,7 @@ use async_std::{
     task,
 };
 use parry2d::na::Isometry2;
-use path_tracking::Tracker;
-use pose_filter::InterpolationAndPredictionFilter;
-use std::{thread, time::Instant};
+use std::time::Instant;
 
 mod chassis;
 mod lidar;
@@ -50,22 +48,21 @@ pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
         let to_lidar = to_lidar.clone();
         let to_follower = to_tracker.clone();
         let to_extern = to_app.clone();
-        thread::spawn(move || chassis::supervisor(to_lidar, to_follower, to_extern, for_chassis));
+        task::spawn_blocking(move || {
+            chassis::supervisor(to_lidar, to_follower, to_extern, for_chassis)
+        });
     }
     {
         // 监控雷达
         let to_chassis = to_chassis.clone();
         let to_extern = to_app.clone();
-        thread::spawn(move || lidar::supervisor(to_chassis, to_extern, for_lidar));
+        task::spawn_blocking(move || lidar::supervisor(to_chassis, to_extern, for_lidar));
     }
     if rtk {
         // 监控位导
         let to_follower = to_tracker.clone();
-        thread::spawn(move || rtk::supervisor(to_follower));
+        task::spawn_blocking(move || rtk::supervisor(to_follower));
     }
-    let mut controller = Tracker::new("path").unwrap();
-    let mut filter = InterpolationAndPredictionFilter::new();
-    let mut pause = false;
     // {
     //     // 导航
     //     let to_chassis = to_chassis.clone();
