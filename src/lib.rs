@@ -3,12 +3,14 @@ use async_std::{
     task,
 };
 use parry2d::na::Isometry2;
-use std::time::Instant;
+use std::time::Duration;
 
 mod chassis;
 mod lidar;
 mod rtk;
 mod tracker;
+
+type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
 pub use pm1_sdk::{
     model::{Odometry, Physical},
@@ -31,70 +33,48 @@ pub enum Event {
     CollisionDetected(f32),
 }
 
-enum Locating {
-    Absolute(Instant, Isometry2<f32>),
-    Relative(Instant, Isometry2<f32>),
-}
-
 pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
-    let (to_chassis, for_chassis) = unbounded();
-    let (to_lidar, for_lidar) = unbounded();
-    let (to_tracker, for_tracker) = unbounded();
-    let (to_app, for_app) = unbounded();
-    let (to_this, for_this) = unbounded();
+    let rtk = if rtk {
+        rtk::supervisor()
+    } else {
+        unbounded().1
+    };
+    let (to_chassis, chassis) = chassis::supervisor();
+    let (to_lidar, lidar) = lidar::supervisor();
 
-    {
-        // 监控底盘
-        let to_lidar = to_lidar.clone();
-        let to_follower = to_tracker.clone();
-        let to_extern = to_app.clone();
-        task::spawn_blocking(move || {
-            chassis::supervisor(to_lidar, to_follower, to_extern, for_chassis)
-        });
-    }
-    {
-        // 监控雷达
-        let to_chassis = to_chassis.clone();
-        let to_extern = to_app.clone();
-        task::spawn_blocking(move || lidar::supervisor(to_chassis, to_extern, for_lidar));
-    }
-    if rtk {
-        // 监控位导
-        let to_follower = to_tracker.clone();
-        task::spawn_blocking(move || rtk::supervisor(to_follower));
-    }
-    // {
-    //     // 导航
-    //     let to_chassis = to_chassis.clone();
-    //     let to_app = to_app.clone();
-    //     task::spawn(async move { tracker::task(to_chassis, to_app, for_tracker).await });
-    // }
-    {
-        // 交互
-        task::spawn(async move {
-            while let Ok(cmd) = for_this.recv().await {
-                use Command::*;
-                match cmd {
-                    Move(p) => {
-                        if p.speed == 0.0 {
-                            let _ = to_chassis.send(chassis::Message::Move(p)).await;
-                            let _ = to_app.send(Event::CollisionDetected(0.0)).await;
-                        } else {
-                            let _ = to_chassis
-                                .send(chassis::Message::PredictArtificial(p))
-                                .await;
-                        }
-                    }
-                    Track(name) => {}
-                    Record(String) => {}
-                    Pause(bool) => {}
-                    Stop => {}
-                }
+    task::spawn(async move {
+        while let Ok(e) = rtk.recv().await {
+            use rtk::Event::*;
+            match e {
+                Connected => {}
+                Disconnected => {}
+                SolutionUpdated(t, s) => {}
             }
-        });
-    }
+        }
+    });
+    task::spawn(async move {
+        while let Ok(e) = chassis.recv().await {
+            use chassis::Event::*;
+            match e {
+                Connected => {}
+                Disconnected => {}
+                StatusUpdated(s) => {}
+                OdometryUpdated(t, o) => {}
+            }
+        }
+    });
+    task::spawn(async move {
+        while let Ok(e) = lidar.recv().await {
+            use lidar::Event::*;
+            match e {
+                Connected => {}
+                Disconnected => {}
+                FrameEncoded(buf) => {}
+            }
+        }
+    });
 
-    (to_this, for_app)
+    todo!()
 }
 
 mod macros {

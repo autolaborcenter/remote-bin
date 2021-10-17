@@ -1,23 +1,42 @@
-﻿use super::{macros::send_anyway, Locating};
-use async_std::channel::Sender;
-use parry2d::na::{Isometry2, Vector2};
+﻿use super::macros::send_anyway;
+use async_std::{
+    channel::{unbounded, Receiver},
+    task,
+};
 use pm1_sdk::driver::{SupersivorEventForSingle::*, SupervisorForSingle};
 use rtk_ins570::{Solution, RTK};
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
-pub(super) fn supervisor(filter: Sender<Locating>) {
-    SupervisorForSingle::<RTK>::new().join(|e| {
-        match e {
-            Connected(k, _) => eprintln!("RTK at COM {}", k),
-            ConnectFailed | Disconnected => thread::sleep(Duration::from_secs(1)),
-            Event(_, Some((time, Solution::Data { state, enu, dir }))) => {
-                if state.state_pos >= 40 && state.state_dir >= 30 {
-                    let pose = Isometry2::new(Vector2::new(enu.e as f32, enu.n as f32), dir as f32);
-                    send_anyway!(Locating::Absolute(time, pose) => filter);
+pub(super) enum Event {
+    Connected,
+    Disconnected,
+    SolutionUpdated(Instant, Solution),
+}
+
+pub(super) fn supervisor() -> Receiver<Event> {
+    let (sender, receiver) = unbounded();
+    task::spawn_blocking(move || {
+        SupervisorForSingle::<RTK>::new().join(|e| {
+            match e {
+                Connected(k, _) => {
+                    send_anyway!(Event::Connected => sender);
                 }
-            }
-            Event(_, _) => {}
-        };
-        true
+                ConnectFailed => {
+                    thread::sleep(Duration::from_secs(1));
+                }
+                Disconnected => {
+                    send_anyway!(Event::Disconnected => sender);
+                }
+                Event(_, Some((time, solution))) => {
+                    send_anyway!(Event::SolutionUpdated(time, solution) => sender);
+                }
+                Event(_, None) => {}
+            };
+            true
+        });
     });
+    receiver
 }

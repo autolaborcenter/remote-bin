@@ -1,37 +1,24 @@
-﻿use lidar_faselase::FrameCollector;
+﻿use super::{CollisionInfo, Duration, FrameCollector, Odometry, Trajectory};
 use parry2d::{
     math::{Point, Real},
     na::Isometry2,
     query::PointQuery,
     shape::ConvexPolygon,
 };
-use pm1_sdk::model::{ChassisModel, Odometry, Physical, Predictor};
-use std::time::Duration;
 
-pub(super) fn detect(
-    frame: &[FrameCollector],
-    model: ChassisModel,
-    predictor: Predictor,
-) -> Option<(Duration, Odometry, f32)> {
-    const PERIOD: Duration = Duration::from_millis(40);
-    const PERIOD_SEC: f32 = 0.04;
-
+pub(super) fn detect(frame: &[FrameCollector], trajectory: Trajectory) -> Option<CollisionInfo> {
     let mut pose = Odometry::ZERO;
     let mut time = Duration::ZERO;
     let mut size = 1.0;
-    for status in predictor {
-        time += PERIOD;
+    for (dt, dp) in trajectory {
+        time += dt;
         if time > Duration::from_secs(2) {
             return None;
         }
-        let delta = model.physical_to_odometry(Physical {
-            speed: status.speed * PERIOD_SEC,
-            ..status
-        });
-        size += delta.s;
-        pose += delta;
+        size += dp.s;
+        pose += dp;
         if check(&frame, pose.pose, size) {
-            return Some((time, pose, size));
+            return Some(CollisionInfo(time, pose, size));
         }
     }
     panic!("Impossible!");
