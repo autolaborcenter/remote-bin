@@ -1,4 +1,4 @@
-﻿use super::{macros::send_anyway, Odometry, Trajectory};
+﻿use super::{call, send_async, CollisionInfo, Odometry, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
@@ -16,9 +16,17 @@ use std::{
 
 mod collision;
 
-pub(super) struct CollisionInfo(pub Duration, pub Odometry, pub f32);
+#[derive(Clone)]
+pub(super) struct Lidar(Sender<Command>);
 
-pub(super) struct Command(pub Trajectory, pub Sender<Option<CollisionInfo>>);
+impl Lidar {
+    #[inline]
+    pub async fn check(&self, trajectory: Trajectory) -> Option<Option<CollisionInfo>> {
+        call!(self.0; Command, trajectory)
+    }
+}
+
+struct Command(Trajectory, Sender<Option<CollisionInfo>>);
 
 pub(super) enum Event {
     Connected,
@@ -26,7 +34,7 @@ pub(super) enum Event {
     FrameEncoded(Vec<u8>),
 }
 
-pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
+pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
     let (for_extern, command) = unbounded();
     let (event, to_extern) = unbounded();
     task::spawn_blocking(move || {
@@ -59,7 +67,7 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
         SupervisorForMultiple::<D10>::new().join(2, |e| {
             match e {
                 Connected(k, lidar) => {
-                    send_anyway!(Event::Connected => event);
+                    send_async!(Event::Connected => event);
                     if let Some(i) = indexer.add(k.clone()) {
                         lidar.send(FILTERS[i]);
                         if i == 0 {
@@ -71,7 +79,7 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
                     }
                 }
                 Disconnected(k) => {
-                    send_anyway!(Event::Disconnected => event);
+                    send_async!(Event::Disconnected => event);
                     if let Some(i) = indexer.remove(k) {
                         if i == 0 {
                             update_filter = 0;
@@ -99,7 +107,7 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
                         trajectory = Some(tr);
                     }
                     if let Some(Command(tr, r)) = trajectory {
-                        send_anyway!(collision::detect(&frame, tr) => r);
+                        send_async!(collision::detect(&frame, tr) => r);
                     }
                     // 发送
                     if now >= send_time {
@@ -108,7 +116,7 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
                         let _ = buf.write_all(&[255]);
                         frame[1].write_to(&mut buf);
                         frame[0].write_to(&mut buf);
-                        send_anyway!(Event::FrameEncoded(buf) => event);
+                        send_async!(Event::FrameEncoded(buf) => event);
                     }
                 }
                 ConnectFailed {
@@ -121,5 +129,5 @@ pub(super) fn supervisor() -> (Sender<Command>, Receiver<Event>) {
             2
         });
     });
-    (for_extern, to_extern)
+    (Lidar(for_extern), to_extern)
 }

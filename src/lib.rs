@@ -2,7 +2,6 @@ use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
 };
-use macros::*;
 use parry2d::na::Isometry2;
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ pub use pm1_sdk::{
     PM1Status,
 };
 
-use crate::lidar::CollisionInfo;
+struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
 pub enum Command {
     Move(Physical),
@@ -42,34 +41,44 @@ pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
     } else {
         unbounded().1
     };
-    let (to_chassis, chassis) = chassis::supervisor();
-    let (to_lidar, lidar) = lidar::supervisor();
+    let (chassis, from_chassis) = chassis::supervisor();
+    let (lidar, from_lidar) = lidar::supervisor();
     let (for_extern, command) = unbounded();
     let (event, to_extern) = unbounded();
 
-    task::spawn(async move {
-        while let Ok(e) = command.recv().await {
-            use Command::*;
-            match e {
-                Move(p) => {
-                    if let Some(tr) = call!(to_chassis; chassis::Command::PredictArtificial, p) {
-                        if let Some(ci) = call!(to_lidar; lidar::Command, tr) {
-                            match ci {
-                                Some(CollisionInfo(time, odometer, p)) => {}
-                                None => {
-                                    let _ = to_chassis.send(chassis::Command::Move(p)).await;
+    {
+        let event = event.clone();
+        task::spawn(async move {
+            while let Ok(e) = command.recv().await {
+                use Command::*;
+                match e {
+                    Move(p) => {
+                        if p.speed == 0.0 {
+                            let _ = chassis.drive(p).await;
+                        } else {
+                            if let Some(tr) = chassis.predict(p).await {
+                                if let Some(ci) = lidar.check(tr).await {
+                                    match ci {
+                                        Some(ci) => {
+                                            let _ = event.send(Event::CollisionDetected(
+                                                chassis.avoid_collision(p, ci).await,
+                                            ));
+                                        }
+                                        None => chassis.drive(p).await,
+                                    }
                                 }
                             }
                         }
                     }
+                    Track(name) => {}
+                    Record(name) => {}
+                    Pause(bool) => {}
+                    Stop => {}
                 }
-                Track(name) => {}
-                Record(name) => {}
-                Pause(bool) => {}
-                Stop => {}
             }
-        }
-    });
+        });
+    }
+
     task::spawn(async move {
         while let Ok(e) = rtk.recv().await {
             use rtk::Event::*;
@@ -80,33 +89,46 @@ pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
             }
         }
     });
-    task::spawn(async move {
-        while let Ok(e) = chassis.recv().await {
-            use chassis::Event::*;
-            match e {
-                Connected => {}
-                Disconnected => {}
-                StatusUpdated(s) => {}
-                OdometryUpdated(t, o) => {}
+    {
+        let event = event.clone();
+        task::spawn(async move {
+            while let Ok(e) = from_chassis.recv().await {
+                use chassis::Event::*;
+                match e {
+                    Connected => {}
+                    Disconnected => {}
+                    StatusUpdated(s) => {
+                        let _ = event.send(Event::ChassisStatusUpdated(s)).await;
+                    }
+                    OdometryUpdated(t, o) => {
+                        let _ = event.send(Event::ChassisOdometerUpdated(o.s, o.a)).await;
+                    }
+                }
             }
-        }
-    });
-    task::spawn(async move {
-        while let Ok(e) = lidar.recv().await {
-            use lidar::Event::*;
-            match e {
-                Connected => {}
-                Disconnected => {}
-                FrameEncoded(buf) => {}
+        });
+    }
+    {
+        let event = event.clone();
+        task::spawn(async move {
+            while let Ok(e) = from_lidar.recv().await {
+                use lidar::Event::*;
+                match e {
+                    Connected => {}
+                    Disconnected => {}
+                    FrameEncoded(buf) => {
+                        let _ = event.send(Event::LidarFrameEncoded(buf)).await;
+                    }
+                }
             }
-        }
-    });
+        });
+    }
 
     (for_extern, to_extern)
 }
 
+use macros::*;
 mod macros {
-    macro_rules! send_anyway {
+    macro_rules! send_async {
         ($msg:expr => $sender:expr) => {
             let _ = async_std::task::block_on(async { $sender.send($msg).await });
         };
@@ -125,5 +147,5 @@ mod macros {
         }};
     }
 
-    pub(crate) use {call, send_anyway};
+    pub(crate) use {call, send_async};
 }
