@@ -2,6 +2,8 @@ use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
 };
+use chassis::Chassis;
+use lidar::Lidar;
 use parry2d::na::Isometry2;
 use std::time::Duration;
 
@@ -19,12 +21,11 @@ pub use pm1_sdk::{
 
 struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
-pub enum Command {
-    Move(Physical),
-    Track(String),
-    Record(String),
-    Pause(bool),
-    Stop,
+#[derive(Clone)]
+pub struct Robot {
+    chassis: Chassis,
+    lidar: Lidar,
+    event: Sender<Event>,
 }
 
 pub enum Event {
@@ -35,95 +36,94 @@ pub enum Event {
     CollisionDetected(f32),
 }
 
-pub fn launch(rtk: bool) -> (Sender<Command>, Receiver<Event>) {
-    let rtk = if rtk {
-        rtk::supervisor()
-    } else {
-        unbounded().1
-    };
-    let (chassis, from_chassis) = chassis::supervisor();
-    let (lidar, from_lidar) = lidar::supervisor();
-    let (for_extern, command) = unbounded();
-    let (event, to_extern) = unbounded();
+impl Robot {
+    pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
+        let rtk = if rtk {
+            rtk::supervisor()
+        } else {
+            unbounded().1
+        };
+        let (chassis, from_chassis) = chassis::supervisor();
+        let (lidar, from_lidar) = lidar::supervisor();
+        let (event, to_extern) = unbounded();
 
-    {
-        let event = event.clone();
         task::spawn(async move {
-            while let Ok(e) = command.recv().await {
-                use Command::*;
+            while let Ok(e) = rtk.recv().await {
+                use rtk::Event::*;
                 match e {
-                    Move(p) => {
-                        if p.speed == 0.0 {
-                            let _ = chassis.drive(p).await;
-                        } else {
-                            if let Some(tr) = chassis.predict(p).await {
-                                if let Some(ci) = lidar.check(tr).await {
-                                    match ci {
-                                        Some(ci) => {
-                                            let _ = event.send(Event::CollisionDetected(
-                                                chassis.avoid_collision(p, ci).await,
-                                            ));
-                                        }
-                                        None => chassis.drive(p).await,
-                                    }
-                                }
-                            }
+                    Connected => {}
+                    Disconnected => {}
+                    SolutionUpdated(t, s) => {}
+                }
+            }
+        });
+        {
+            let event = event.clone();
+            task::spawn(async move {
+                while let Ok(e) = from_chassis.recv().await {
+                    use chassis::Event::*;
+                    match e {
+                        Connected => {}
+                        Disconnected => {}
+                        StatusUpdated(s) => {
+                            let _ = event.send(Event::ChassisStatusUpdated(s)).await;
+                        }
+                        OdometryUpdated(t, o) => {
+                            let _ = event.send(Event::ChassisOdometerUpdated(o.s, o.a)).await;
                         }
                     }
-                    Track(name) => {}
-                    Record(name) => {}
-                    Pause(bool) => {}
-                    Stop => {}
                 }
-            }
-        });
+            });
+        }
+        {
+            let event = event.clone();
+            task::spawn(async move {
+                while let Ok(e) = from_lidar.recv().await {
+                    use lidar::Event::*;
+                    match e {
+                        Connected => {}
+                        Disconnected => {}
+                        FrameEncoded(buf) => {
+                            let _ = event.send(Event::LidarFrameEncoded(buf)).await;
+                        }
+                    }
+                }
+            });
+        }
+
+        (
+            Self {
+                chassis,
+                lidar,
+                event,
+            },
+            to_extern,
+        )
     }
 
-    task::spawn(async move {
-        while let Ok(e) = rtk.recv().await {
-            use rtk::Event::*;
-            match e {
-                Connected => {}
-                Disconnected => {}
-                SolutionUpdated(t, s) => {}
+    pub async fn drive(&self, p: Physical) {
+        if p.speed == 0.0 {
+            let _ = self.chassis.drive(p).await;
+            let _ = self.event.send(Event::CollisionDetected(0.0)).await;
+            return;
+        } else {
+            if let Some(tr) = self.chassis.predict(p).await {
+                if let Some(ci) = self.lidar.check(tr).await {
+                    match ci {
+                        Some(ci) => {
+                            let risk = self.chassis.avoid_collision(p, ci).await;
+                            let _ = self.event.send(Event::CollisionDetected(risk)).await;
+                        }
+                        None => {
+                            self.chassis.drive(p).await;
+                            let _ = self.event.send(Event::CollisionDetected(0.0)).await;
+                        }
+                    }
+                    return;
+                }
             }
         }
-    });
-    {
-        let event = event.clone();
-        task::spawn(async move {
-            while let Ok(e) = from_chassis.recv().await {
-                use chassis::Event::*;
-                match e {
-                    Connected => {}
-                    Disconnected => {}
-                    StatusUpdated(s) => {
-                        let _ = event.send(Event::ChassisStatusUpdated(s)).await;
-                    }
-                    OdometryUpdated(t, o) => {
-                        let _ = event.send(Event::ChassisOdometerUpdated(o.s, o.a)).await;
-                    }
-                }
-            }
-        });
     }
-    {
-        let event = event.clone();
-        task::spawn(async move {
-            while let Ok(e) = from_lidar.recv().await {
-                use lidar::Event::*;
-                match e {
-                    Connected => {}
-                    Disconnected => {}
-                    FrameEncoded(buf) => {
-                        let _ = event.send(Event::LidarFrameEncoded(buf)).await;
-                    }
-                }
-            }
-        });
-    }
-
-    (for_extern, to_extern)
 }
 
 use macros::*;

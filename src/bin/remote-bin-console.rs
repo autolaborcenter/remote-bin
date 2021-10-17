@@ -1,5 +1,5 @@
 ﻿use async_std::{channel::unbounded, net::UdpSocket, task};
-use robot_bin::{launch, Command, Odometry, PM1Status, Physical};
+use robot_bin::{Odometry, PM1Status, Physical, Robot};
 use std::net::SocketAddr;
 
 enum Event {
@@ -11,7 +11,7 @@ enum Event {
 
 #[async_std::main]
 async fn main() {
-    let (command, events) = launch(false);
+    let (robot, events) = Robot::spawn(false).await;
     let (s0, receiver) = unbounded();
     let s1 = s0.clone();
     task::spawn(async move {
@@ -35,7 +35,7 @@ async fn main() {
                         Some(&"move") => {
                             if tokens.len() == 3 {
                                 if let Some(p) = parse(tokens[1], tokens[2]) {
-                                    let _ = command.send(Command::Move(p));
+                                    robot.drive(p).await;
                                 }
                             }
                         }
