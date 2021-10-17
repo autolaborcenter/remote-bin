@@ -1,5 +1,5 @@
 [package]
-name = "remote-bin"
+name = "robot-bin"
 version = "0.1.0"
 edition = "2021"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
@@ -10,7 +10,7 @@ pm1-sdk = { path = "../pm1-sdk-3" }
 lidar-faselase = { path = "../lidar-faselase" }
 rtk-ins570 = { path = "../rtk-ins570" }
 pose-filter = { path = "../pose-filter" }
-path-follower = { path = "../path-follower" }
+path-tracking = { path = "../path-tracking" }
 async-std = { version = "*", features = ["attributes"] }
 parry2d = "*"
 

@@ -1,11 +1,11 @@
 ﻿use async_std::{channel::unbounded, net::UdpSocket, task};
-use remote_bin::{launch, Command, Odometry, PM1Status, Physical};
+use robot_bin::{launch, Command, Odometry, PM1Status, Physical};
 use std::net::SocketAddr;
 
 enum Event {
     ShowRequest,
     UpdateUser(Option<SocketAddr>),
-    Internal(remote_bin::Event),
+    Internal(robot_bin::Event),
     Exit,
 }
 
@@ -84,7 +84,7 @@ async fn main() {
             }
             Ok(Event::UpdateUser(a)) => address = a,
             Ok(Event::Internal(e)) => {
-                use remote_bin::Event::*;
+                use robot_bin::Event::*;
                 match e {
                     ChassisStatusUpdated(s) => status = s,
                     ChassisOdometerUpdated(s, a) => odometer = (s, a),

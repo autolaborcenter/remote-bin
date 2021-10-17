@@ -1,11 +1,11 @@
-﻿use super::{macros::send_anyway, tracker::Message as Tracker};
+﻿use super::{macros::send_anyway, Locating};
 use async_std::channel::Sender;
 use parry2d::na::{Isometry2, Vector2};
 use pm1_sdk::driver::{SupersivorEventForSingle::*, SupervisorForSingle};
 use rtk_ins570::{Solution, RTK};
 use std::{thread, time::Duration};
 
-pub(super) fn supervisor(tracker: Sender<Tracker>) {
+pub(super) fn supervisor(filter: Sender<Locating>) {
     SupervisorForSingle::<RTK>::new().join(|e| {
         match e {
             Connected(k, _) => eprintln!("RTK at COM {}", k),
@@ -13,7 +13,7 @@ pub(super) fn supervisor(tracker: Sender<Tracker>) {
             Event(_, Some((time, Solution::Data { state, enu, dir }))) => {
                 if state.state_pos >= 40 && state.state_dir >= 30 {
                     let pose = Isometry2::new(Vector2::new(enu.e as f32, enu.n as f32), dir as f32);
-                    send_anyway!(Tracker::Absolute(time, pose) => tracker);
+                    send_anyway!(Locating::Absolute(time, pose) => filter);
                 }
             }
             Event(_, _) => {}

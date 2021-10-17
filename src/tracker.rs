@@ -1,7 +1,7 @@
 ﻿use super::{chassis::Message as Chassis, Event};
 use async_std::channel::{Receiver, Sender};
 use parry2d::na::Isometry2;
-use path_follower::Controller;
+use path_tracking::Tracker;
 use pm1_sdk::model::Physical;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use std::time::Instant;
@@ -10,8 +10,8 @@ pub(super) enum Message {
     Absolute(Instant, Isometry2<f32>),
     Relative(Instant, Isometry2<f32>),
     Record(String),
-    Follow(String),
-    Cancel,
+    Track(String),
+    Stop,
     Pause(bool),
 }
 
@@ -20,7 +20,7 @@ pub(super) async fn task(
     app: Sender<Event>,
     mail_box: Receiver<Message>,
 ) {
-    let mut controller = Controller::new("path").unwrap();
+    let mut controller = Tracker::new("path").unwrap();
     let mut filter = InterpolationAndPredictionFilter::new();
     let mut pause = false;
 
@@ -50,12 +50,12 @@ pub(super) async fn task(
                     eprintln!("Failed to record: {:?}", e);
                 }
             }
-            Follow(name) => {
+            Track(name) => {
                 if let Err(e) = controller.follow(name.as_str()) {
                     eprintln!("Failed to follow: {:?}", e);
                 }
             }
-            Cancel => {
+            Stop => {
                 controller.stop_task();
             }
             Pause(value) => {

@@ -1,4 +1,4 @@
-﻿use path_follower::Controller;
+﻿use path_tracking::Tracker;
 use rtk_ins570::{Enu, WGS84};
 use std::{
     io::Write,
@@ -30,7 +30,7 @@ fn main() {
         });
     }
 
-    let controller = Controller::new("path").unwrap();
+    let controller = Tracker::new("path").unwrap();
     let mut path: Option<(String, Vec<u8>)> = None;
     let mut line = String::new();
     loop {
