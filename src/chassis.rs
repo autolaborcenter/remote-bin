@@ -1,4 +1,4 @@
-﻿use super::{call, send_async, CollisionInfo, Trajectory};
+﻿use super::{call, send_async, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
@@ -10,7 +10,6 @@ use pm1_sdk::{
     PM1Event, PM1Status, CONTROL_PERIOD, PM1,
 };
 use std::{
-    f32::consts::FRAC_PI_8,
     thread,
     time::{Duration, Instant},
 };
@@ -27,20 +26,6 @@ impl Chassis {
     #[inline]
     pub async fn drive(&self, p: Physical) {
         let _ = self.0.send(Command::Drive(p)).await;
-    }
-
-    #[inline]
-    pub async fn avoid_collision(&self, mut target: Physical, ci: CollisionInfo) -> f32 {
-        let CollisionInfo(time, Odometry { s, a, pose: _ }, p) = ci;
-        if s < 0.20 && a < FRAC_PI_8 {
-            let _ = self.0.send(Command::Drive(Physical::RELEASED)).await;
-            1.0
-        } else {
-            let sec = time.as_secs_f32();
-            target.speed *= sec / 2.0;
-            let _ = self.0.send(Command::Drive(target)).await;
-            (2.0 - sec) * p
-        }
     }
 }
 

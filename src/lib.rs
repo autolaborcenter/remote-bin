@@ -10,12 +10,14 @@ use parry2d::na::{Isometry2, Vector2};
 use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
-use std::time::{Duration, Instant};
+use std::{
+    f32::consts::FRAC_PI_8,
+    time::{Duration, Instant},
+};
 
 mod chassis;
 mod lidar;
 mod rtk;
-mod tracker;
 
 type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
@@ -146,31 +148,54 @@ impl Robot {
         (robot.clone(), to_extern)
     }
 
-    pub async fn drive(&self, p: Physical) {
+    pub async fn drive(&self, mut target: Physical) {
         join!(
             async {
                 let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
                 *self.artifical_deadline.lock().await = deadline;
             },
             async {
-                if let Some(risk) = drive(&self.chassis, &self.lidar, p).await {
-                    send_async!(Event::CollisionDetected(risk) => self.event).await;
+                if target.speed == 0.0 {
+                    self.drive_and_warn(target, 0.0).await;
+                } else {
+                    if let Some(tr) = self.chassis.predict(target).await {
+                        if let Some(ci) = self.lidar.check(tr).await {
+                            match ci {
+                                Some(CollisionInfo(time, Odometry { s, a, pose: _ }, p)) => {
+                                    if s < 0.20 && a < FRAC_PI_8 {
+                                        self.drive_and_warn(Physical::RELEASED, 1.0).await;
+                                    } else {
+                                        let sec = time.as_secs_f32();
+                                        target.speed *= sec / 2.0;
+                                        self.drive_and_warn(target, f32::min(1.0, (2.0 - sec) * p))
+                                            .await;
+                                    }
+                                }
+                                None => self.drive_and_warn(target, 0.0).await,
+                            };
+                        }
+                    }
                 }
             }
         );
     }
 
+    #[inline]
+    async fn drive_and_warn(&self, p: Physical, r: f32) {
+        join!(
+            self.chassis.drive(p),
+            send_async!(Event::CollisionDetected(r) => self.event),
+        );
+    }
+
+    #[inline]
     async fn automitic(&self, pose: Isometry2<f32>) {
         if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
             if *self.artifical_deadline.lock().await < Instant::now() {
-                drive(
-                    &self.chassis,
-                    &self.lidar,
-                    Physical {
-                        speed: 0.25,
-                        rudder: -2.0 * (0.5 - frac),
-                    },
-                )
+                self.drive(Physical {
+                    speed: 0.25,
+                    rudder: -2.0 * (0.5 - frac),
+                })
                 .await;
             }
         }
@@ -201,24 +226,4 @@ mod macros {
     }
 
     pub(crate) use {call, send_async};
-}
-
-async fn drive(chassis: &Chassis, lidar: &Lidar, p: Physical) -> Option<f32> {
-    if p.speed == 0.0 {
-        let _ = chassis.drive(p).await;
-        Some(0.0)
-    } else {
-        if let Some(tr) = chassis.predict(p).await {
-            if let Some(ci) = lidar.check(tr).await {
-                return match ci {
-                    Some(ci) => Some(chassis.avoid_collision(p, ci).await),
-                    None => {
-                        chassis.drive(p).await;
-                        Some(0.0)
-                    }
-                };
-            }
-        }
-        None
-    }
 }
