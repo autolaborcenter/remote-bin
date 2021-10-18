@@ -1,10 +1,14 @@
 use async_std::{
     channel::{unbounded, Receiver, Sender},
+    sync::{Arc, Mutex},
     task,
 };
 use chassis::Chassis;
 use lidar::Lidar;
-use parry2d::na::Isometry2;
+use parry2d::na::{Isometry2, Vector2};
+use path_tracking::Tracker;
+use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
+use rtk_ins570::{Solution, SolutionState};
 use std::time::Duration;
 
 mod chassis;
@@ -26,6 +30,8 @@ pub struct Robot {
     chassis: Chassis,
     lidar: Lidar,
     event: Sender<Event>,
+
+    tracker: Arc<Mutex<Tracker>>,
 }
 
 pub enum Event {
@@ -46,19 +52,45 @@ impl Robot {
         let (chassis, from_chassis) = chassis::supervisor();
         let (lidar, from_lidar) = lidar::supervisor();
         let (event, to_extern) = unbounded();
-
-        task::spawn(async move {
-            while let Ok(e) = rtk.recv().await {
-                use rtk::Event::*;
-                match e {
-                    Connected => {}
-                    Disconnected => {}
-                    SolutionUpdated(t, s) => {}
-                }
-            }
-        });
+        let filter = Arc::new(Mutex::new(InterpolationAndPredictionFilter::new()));
+        let tracker = Arc::new(Mutex::new(Tracker::new("path").unwrap()));
         {
             let event = event.clone();
+            let filter = filter.clone();
+            task::spawn(async move {
+                while let Ok(e) = rtk.recv().await {
+                    use rtk::Event::*;
+                    match e {
+                        Connected => {}
+                        Disconnected => {}
+                        SolutionUpdated(t, s) => match s {
+                            Solution::Uninitialized(_) => {}
+                            Solution::Data { state, enu, dir } => {
+                                let SolutionState {
+                                    state_pos,
+                                    state_dir,
+                                    satellites: _,
+                                } = state;
+                                if state_pos > 40 && state_dir > 30 {
+                                    let pose = filter.lock().await.update(
+                                        PoseType::Absolute,
+                                        t,
+                                        Isometry2::new(
+                                            Vector2::new(enu.e as f32, enu.n as f32),
+                                            dir as f32,
+                                        ),
+                                    );
+                                    let _ = event.send(Event::PoseUpdated(pose)).await;
+                                }
+                            }
+                        },
+                    }
+                }
+            });
+        }
+        {
+            let event = event.clone();
+            let filter = filter.clone();
             task::spawn(async move {
                 while let Ok(e) = from_chassis.recv().await {
                     use chassis::Event::*;
@@ -69,7 +101,9 @@ impl Robot {
                             let _ = event.send(Event::ChassisStatusUpdated(s)).await;
                         }
                         OdometryUpdated(t, o) => {
+                            let pose = filter.lock().await.update(PoseType::Relative, t, o.pose);
                             let _ = event.send(Event::ChassisOdometerUpdated(o.s, o.a)).await;
+                            let _ = event.send(Event::PoseUpdated(pose)).await;
                         }
                     }
                 }
@@ -96,6 +130,7 @@ impl Robot {
                 chassis,
                 lidar,
                 event,
+                tracker,
             },
             to_extern,
         )
