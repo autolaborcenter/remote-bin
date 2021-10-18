@@ -67,7 +67,7 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
         SupervisorForMultiple::<D10>::new().join(2, |e| {
             match e {
                 Connected(k, lidar) => {
-                    send_async!(Event::Connected => event);
+                    task::block_on(send_async!(Event::Connected => event));
                     if let Some(i) = indexer.add(k.clone()) {
                         lidar.send(FILTERS[i]);
                         if i == 0 {
@@ -79,7 +79,7 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                     }
                 }
                 Disconnected(k) => {
-                    send_async!(Event::Disconnected => event);
+                    task::block_on(send_async!(Event::Disconnected => event));
                     if let Some(i) = indexer.remove(k) {
                         if i == 0 {
                             update_filter = 0;
@@ -107,7 +107,7 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                         trajectory = Some(tr);
                     }
                     if let Some(Command(tr, r)) = trajectory {
-                        send_async!(collision::detect(&frame, tr) => r);
+                        task::block_on(send_async!(collision::detect(&frame, tr) => r));
                     }
                     // 发送
                     if now >= send_time {
@@ -116,7 +116,7 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                         let _ = buf.write_all(&[255]);
                         frame[1].write_to(&mut buf);
                         frame[0].write_to(&mut buf);
-                        send_async!(Event::FrameEncoded(buf) => event);
+                        task::block_on(send_async!(Event::FrameEncoded(buf) => event));
                     }
                 }
                 ConnectFailed {

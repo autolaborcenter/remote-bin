@@ -1,12 +1,11 @@
-﻿use crate::CollisionInfo;
-
-use super::{call, send_async, Trajectory};
+﻿use super::{call, send_async, CollisionInfo, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     task,
 };
+use futures::join;
 use pm1_sdk::{
-    driver::{Driver, SupersivorEventForSingle::*, SupervisorForSingle},
+    driver::{SupersivorEventForSingle::*, SupervisorForSingle},
     model::{ChassisModel, Odometry, Physical, Predictor},
     PM1Event, PM1Status, CONTROL_PERIOD, PM1,
 };
@@ -67,11 +66,15 @@ pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
         SupervisorForSingle::<PM1>::new().join(|e| {
             match e {
                 Connected(_, chassis) => {
-                    send_async!(Event::Connected => event);
-                    send_async!(Event::StatusUpdated(*chassis.status()) => event);
+                    task::block_on(async {
+                        join!(
+                            send_async!(Event::Connected => event),
+                            send_async!(Event::StatusUpdated(*chassis.status()) => event)
+                        );
+                    });
                 }
                 Disconnected => {
-                    send_async!(Event::Disconnected => event);
+                    task::block_on(send_async!(Event::Disconnected => event));
                 }
                 ConnectFailed => {
                     thread::sleep(Duration::from_secs(1));
@@ -80,28 +83,32 @@ pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
                     if let Some((time, e)) = e {
                         if let PM1Event::Odometry(delta) = e {
                             odometry += delta;
-                            send_async!(Event::OdometryUpdated(time, odometry) => event);
+                            task::block_on(
+                                send_async!(Event::OdometryUpdated(time, odometry) => event),
+                            );
                         } else {
-                            send_async!(Event::StatusUpdated(*chassis.status()) => event);
+                            task::block_on(
+                                send_async!(Event::StatusUpdated(*chassis.status()) => event),
+                            );
                         }
                     }
 
                     use Command::*;
-                    let mut mov = None;
+                    let mut tgt = None;
                     let mut pre = None;
                     while let Ok(cmd) = command.try_recv() {
                         match cmd {
-                            Drive(p) => mov = Some(p),
+                            Drive(p) => tgt = Some(p),
                             Predict(_, _) => pre = Some(cmd),
                         }
                     }
-                    if let Some(p) = mov {
-                        chassis.send((Instant::now(), p));
+                    if let Some(p) = tgt {
+                        chassis.drive(p);
                     }
                     if let Some(Predict(p, r)) = pre {
-                        let (model, mut predictor) = chassis.predict();
-                        predictor.set_target(p);
-                        send_async!(Box::new(TrajectoryPredictor{model,predictor}) => r);
+                        let (model, predictor) = chassis.predict_with(p);
+                        let tr: Trajectory = Box::new(TrajectoryPredictor { model, predictor });
+                        task::block_on(send_async!(tr => r));
                     }
                 }
             };

@@ -4,12 +4,13 @@ use async_std::{
     task,
 };
 use chassis::Chassis;
+use futures::join;
 use lidar::Lidar;
 use parry2d::na::{Isometry2, Vector2};
 use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod chassis;
 mod lidar;
@@ -31,6 +32,7 @@ pub struct Robot {
     lidar: Lidar,
     event: Sender<Event>,
 
+    artifical_deadline: Arc<Mutex<Instant>>,
     tracker: Arc<Mutex<Tracker>>,
 }
 
@@ -42,6 +44,8 @@ pub enum Event {
     CollisionDetected(f32),
 }
 
+const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500);
+
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
         let rtk = if rtk {
@@ -52,11 +56,19 @@ impl Robot {
         let (chassis, from_chassis) = chassis::supervisor();
         let (lidar, from_lidar) = lidar::supervisor();
         let (event, to_extern) = unbounded();
+
+        let robot = Self {
+            chassis,
+            lidar,
+            event,
+            artifical_deadline: Arc::new(Mutex::new(Instant::now())),
+            tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
+        };
+
         let filter = Arc::new(Mutex::new(InterpolationAndPredictionFilter::new()));
-        let tracker = Arc::new(Mutex::new(Tracker::new("path").unwrap()));
         {
-            let event = event.clone();
             let filter = filter.clone();
+            let robot = robot.clone();
             task::spawn(async move {
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
@@ -80,7 +92,10 @@ impl Robot {
                                             dir as f32,
                                         ),
                                     );
-                                    let _ = event.send(Event::PoseUpdated(pose)).await;
+                                    join!(
+                                        send_async!(Event::PoseUpdated(pose) => robot.event),
+                                        async { robot.automitic(pose).await }
+                                    );
                                 }
                             }
                         },
@@ -89,8 +104,8 @@ impl Robot {
             });
         }
         {
-            let event = event.clone();
-            let filter = filter.clone();
+            let robot = robot.clone();
+            // move: let filter = filter.clone();
             task::spawn(async move {
                 while let Ok(e) = from_chassis.recv().await {
                     use chassis::Event::*;
@@ -98,19 +113,22 @@ impl Robot {
                         Connected => {}
                         Disconnected => {}
                         StatusUpdated(s) => {
-                            let _ = event.send(Event::ChassisStatusUpdated(s)).await;
+                            send_async!(Event::ChassisStatusUpdated(s) => robot.event).await;
                         }
                         OdometryUpdated(t, o) => {
                             let pose = filter.lock().await.update(PoseType::Relative, t, o.pose);
-                            let _ = event.send(Event::ChassisOdometerUpdated(o.s, o.a)).await;
-                            let _ = event.send(Event::PoseUpdated(pose)).await;
+                            join!(
+                                send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
+                                send_async!(Event::PoseUpdated(pose) => robot.event),
+                                async { robot.automitic(pose).await }
+                            );
                         }
                     }
                 }
             });
         }
         {
-            let event = event.clone();
+            let event = robot.event.clone();
             task::spawn(async move {
                 while let Ok(e) = from_lidar.recv().await {
                     use lidar::Event::*;
@@ -118,44 +136,42 @@ impl Robot {
                         Connected => {}
                         Disconnected => {}
                         FrameEncoded(buf) => {
-                            let _ = event.send(Event::LidarFrameEncoded(buf)).await;
+                            send_async!(Event::LidarFrameEncoded(buf) => event).await;
                         }
                     }
                 }
             });
         }
 
-        (
-            Self {
-                chassis,
-                lidar,
-                event,
-                tracker,
-            },
-            to_extern,
-        )
+        (robot.clone(), to_extern)
     }
 
     pub async fn drive(&self, p: Physical) {
-        if p.speed == 0.0 {
-            let _ = self.chassis.drive(p).await;
-            let _ = self.event.send(Event::CollisionDetected(0.0)).await;
-            return;
-        } else {
-            if let Some(tr) = self.chassis.predict(p).await {
-                if let Some(ci) = self.lidar.check(tr).await {
-                    match ci {
-                        Some(ci) => {
-                            let risk = self.chassis.avoid_collision(p, ci).await;
-                            let _ = self.event.send(Event::CollisionDetected(risk)).await;
-                        }
-                        None => {
-                            self.chassis.drive(p).await;
-                            let _ = self.event.send(Event::CollisionDetected(0.0)).await;
-                        }
-                    }
-                    return;
+        join!(
+            async {
+                let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
+                *self.artifical_deadline.lock().await = deadline;
+            },
+            async {
+                if let Some(risk) = drive(&self.chassis, &self.lidar, p).await {
+                    send_async!(Event::CollisionDetected(risk) => self.event).await;
                 }
+            }
+        );
+    }
+
+    async fn automitic(&self, pose: Isometry2<f32>) {
+        if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
+            if *self.artifical_deadline.lock().await < Instant::now() {
+                drive(
+                    &self.chassis,
+                    &self.lidar,
+                    Physical {
+                        speed: 0.25,
+                        rudder: -2.0 * (0.5 - frac),
+                    },
+                )
+                .await;
             }
         }
     }
@@ -165,7 +181,9 @@ use macros::*;
 mod macros {
     macro_rules! send_async {
         ($msg:expr => $sender:expr) => {
-            let _ = async_std::task::block_on(async { $sender.send($msg).await });
+            async {
+                let _ = $sender.send($msg).await;
+            }
         };
     }
 
@@ -183,4 +201,24 @@ mod macros {
     }
 
     pub(crate) use {call, send_async};
+}
+
+async fn drive(chassis: &Chassis, lidar: &Lidar, p: Physical) -> Option<f32> {
+    if p.speed == 0.0 {
+        let _ = chassis.drive(p).await;
+        Some(0.0)
+    } else {
+        if let Some(tr) = chassis.predict(p).await {
+            if let Some(ci) = lidar.check(tr).await {
+                return match ci {
+                    Some(ci) => Some(chassis.avoid_collision(p, ci).await),
+                    None => {
+                        chassis.drive(p).await;
+                        Some(0.0)
+                    }
+                };
+            }
+        }
+        None
+    }
 }
