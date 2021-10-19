@@ -1,6 +1,7 @@
 ﻿use super::{call, send_async, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
+    sync::Arc,
     task,
 };
 use futures::join;
@@ -10,22 +11,29 @@ use pm1_sdk::{
     PM1Event, PM1Status, CONTROL_PERIOD, PM1,
 };
 use std::{
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
 #[derive(Clone)]
-pub(super) struct Chassis(Sender<Command>);
+pub(super) struct Chassis(Sender<Command>, Arc<AtomicBool>);
 
 impl Chassis {
     #[inline]
     pub async fn predict(&self, p: Physical) -> Option<Trajectory> {
-        call!(self.0; Command::Predict, p)
+        if self.1.load(Ordering::Relaxed) {
+            call!(self.0; Command::Predict, p)
+        } else {
+            None
+        }
     }
 
     #[inline]
     pub async fn drive(&self, p: Physical) {
-        let _ = self.0.send(Command::Drive(p)).await;
+        if self.1.load(Ordering::Relaxed) {
+            let _ = self.0.send(Command::Drive(p)).await;
+        }
     }
 }
 
@@ -45,12 +53,15 @@ pub(super) enum Event {
 pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
     let (for_extern, command) = unbounded();
     let (event, to_extern) = unbounded();
+    let is_available_clone = Arc::new(AtomicBool::new(false));
+    let is_available = is_available_clone.clone();
     task::spawn_blocking(move || {
         let mut odometry = Odometry::ZERO;
 
         SupervisorForSingle::<PM1>::new().join(|e| {
             match e {
                 Connected(_, chassis) => {
+                    is_available.store(true, Ordering::Relaxed);
                     task::block_on(async {
                         join!(
                             send_async!(Event::Connected => event),
@@ -59,12 +70,13 @@ pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
                     });
                 }
                 Disconnected => {
+                    is_available.store(false, Ordering::Relaxed);
+                    // 消费（拒绝）所有断连前到来，未及处理的消息
+                    while let Ok(_) = command.try_recv() {}
                     task::block_on(send_async!(Event::Disconnected => event));
                 }
                 ConnectFailed => {
                     thread::sleep(Duration::from_secs(1));
-                    // 消费（拒绝）所有等待期间到来的请求
-                    while let Ok(_) = command.try_recv() {}
                 }
                 Event(chassis, e) => {
                     if let Some((time, e)) = e {
@@ -102,7 +114,7 @@ pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
             true
         });
     });
-    (Chassis(for_extern), to_extern)
+    (Chassis(for_extern, is_available_clone), to_extern)
 }
 
 struct TrajectoryPredictor {

@@ -100,6 +100,10 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                     if let Some(i) = indexer.remove(k) {
                         // 任何有序号的雷达移除，停止工作
                         is_available.store(false, Ordering::Relaxed);
+                        // 放行所有断连前到来，未及处理的消息
+                        while let Ok(Command(_, r)) = command.try_recv() {
+                            task::block_on(send_async!(None => r));
+                        }
                         // 前移到当前位置的雷达重设过滤器
                         for n in &mut need_update[i..] {
                             *n = true;
@@ -113,13 +117,7 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                     current: _,
                     target: _,
                     next_try,
-                } => {
-                    *next_try = Instant::now() + Duration::from_secs(1);
-                    // 放行所有等待期间到来的询问
-                    while let Ok(Command(_, r)) = command.try_recv() {
-                        task::block_on(send_async!(None => r));
-                    }
-                }
+                } => *next_try = Instant::now() + Duration::from_secs(1),
                 Event(k, e, s) => {
                     let now = Instant::now();
                     // 更新
@@ -149,11 +147,6 @@ pub(super) fn supervisor() -> (Lidar, Receiver<Event>) {
                             frame[1].write_to(&mut buf);
                             frame[0].write_to(&mut buf);
                             task::block_on(send_async!(Event::FrameEncoded(buf) => event));
-                        }
-                    } else {
-                        // 放行所有等待期间到来的询问
-                        while let Ok(Command(_, r)) = command.try_recv() {
-                            task::block_on(send_async!(None => r));
                         }
                     }
                 }
