@@ -1,46 +1,21 @@
-﻿use super::{call, send_async, Trajectory};
+﻿use super::{join_async, send_async, Odometry, Physical, Trajectory};
 use async_std::{
-    channel::{unbounded, Receiver, Sender},
-    sync::Arc,
+    channel::{unbounded, Receiver},
+    sync::{Arc, Mutex},
     task,
 };
-use futures::join;
 use pm1_sdk::{
     driver::{SupersivorEventForSingle::*, SupervisorForSingle},
-    model::{ChassisModel, Odometry, Physical, Predictor},
+    model::{ChassisModel, Predictor},
     PM1Event, PM1Status, CONTROL_PERIOD, PM1,
 };
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
 #[derive(Clone)]
-pub(super) struct Chassis(Sender<Command>, Arc<AtomicBool>);
-
-impl Chassis {
-    #[inline]
-    pub async fn predict(&self, p: Physical) -> Option<Trajectory> {
-        if self.1.load(Ordering::Relaxed) {
-            call!(self.0; Command::Predict, p)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub async fn drive(&self, p: Physical) {
-        if self.1.load(Ordering::Relaxed) {
-            let _ = self.0.send(Command::Drive(p)).await;
-        }
-    }
-}
-
-enum Command {
-    Predict(Physical, Sender<Trajectory>),
-    Drive(Physical),
-}
+pub(super) struct Chassis(Arc<Inner>);
 
 pub(super) enum Event {
     Connected,
@@ -50,71 +25,88 @@ pub(super) enum Event {
     OdometryUpdated(Instant, Odometry),
 }
 
-pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
-    let (for_extern, command) = unbounded();
-    let (event, to_extern) = unbounded();
-    let is_available_clone = Arc::new(AtomicBool::new(false));
-    let is_available = is_available_clone.clone();
-    task::spawn_blocking(move || {
-        let mut odometry = Odometry::ZERO;
+struct Inner {
+    target: Mutex<(Instant, Physical)>,
+    predictor: Mutex<Option<(ChassisModel, Predictor)>>,
+}
 
-        SupervisorForSingle::<PM1>::new().join(|e| {
-            match e {
-                Connected(_, chassis) => {
-                    is_available.store(true, Ordering::Relaxed);
-                    task::block_on(async {
-                        join!(
+impl Chassis {
+    #[inline]
+    pub async fn drive(&self, p: Physical) {
+        let now = Instant::now();
+        *self.0.target.lock().await = (now, p);
+    }
+
+    #[inline]
+    pub async fn predict(&self, p: Physical) -> Option<Trajectory> {
+        self.0
+            .predictor
+            .lock()
+            .await
+            .clone()
+            .map(|(model, mut predictor)| {
+                predictor.target = p;
+                Box::new(TrajectoryPredictor { model, predictor }) as Trajectory
+            })
+    }
+
+    #[inline]
+    async fn set_current(&self, p: Physical) {
+        if let Some((_, pre)) = self.0.predictor.lock().await.as_mut() {
+            pre.current = p;
+        }
+    }
+
+    pub fn supervisor() -> (Self, Receiver<Event>) {
+        let (event, to_extern) = unbounded();
+        let chassis_clone = Self(Arc::new(Inner {
+            target: Mutex::new((Instant::now(), Physical::RELEASED)),
+            predictor: Mutex::new(None),
+        }));
+        let chassis = chassis_clone.clone();
+        task::spawn_blocking(move || {
+            let mut odometry = Odometry::ZERO;
+
+            SupervisorForSingle::<PM1>::new().join(|e| {
+                match e {
+                    Connected(_, driver) => {
+                        join_async!(
+                            async { *chassis.0.predictor.lock().await = Some(driver.predict()) },
                             send_async!(Event::Connected => event),
-                            send_async!(Event::StatusUpdated(*chassis.status()) => event)
+                            send_async!(Event::StatusUpdated(*driver.status()) => event)
                         );
-                    });
-                }
-                Disconnected => {
-                    is_available.store(false, Ordering::Relaxed);
-                    // 消费（拒绝）所有断连前到来，未及处理的消息
-                    while let Ok(_) = command.try_recv() {}
-                    task::block_on(send_async!(Event::Disconnected => event));
-                }
-                ConnectFailed => {
-                    thread::sleep(Duration::from_secs(1));
-                }
-                Event(chassis, e) => {
-                    if let Some((time, e)) = e {
-                        if let PM1Event::Odometry(delta) = e {
-                            odometry += delta;
-                            task::block_on(
-                                send_async!(Event::OdometryUpdated(time, odometry) => event),
-                            );
-                        } else {
-                            task::block_on(
-                                send_async!(Event::StatusUpdated(*chassis.status()) => event),
-                            );
+                    }
+                    Disconnected => {
+                        join_async!(
+                            async { *chassis.0.predictor.lock().await = None },
+                            send_async!(Event::Disconnected => event)
+                        );
+                    }
+                    ConnectFailed => {
+                        thread::sleep(Duration::from_secs(1));
+                    }
+                    Event(driver, e) => {
+                        if let Some((time, e)) = e {
+                            if let PM1Event::Odometry(delta) = e {
+                                odometry += delta;
+                                join_async!(
+                                    send_async!(Event::OdometryUpdated(time, odometry) => event)
+                                );
+                            } else {
+                                let status = driver.status();
+                                join_async!(
+                                    chassis.set_current(status.physical),
+                                    send_async!(Event::StatusUpdated(*status) => event),
+                                );
+                            }
                         }
                     }
-
-                    use Command::*;
-                    let mut tgt = None;
-                    let mut pre = None;
-                    while let Ok(cmd) = command.try_recv() {
-                        match cmd {
-                            Drive(p) => tgt = Some(p),
-                            Predict(_, _) => pre = Some(cmd),
-                        }
-                    }
-                    if let Some(p) = tgt {
-                        chassis.drive(p);
-                    }
-                    if let Some(Predict(p, r)) = pre {
-                        let (model, predictor) = chassis.predict_with(p);
-                        let tr: Trajectory = Box::new(TrajectoryPredictor { model, predictor });
-                        task::block_on(send_async!(tr => r));
-                    }
-                }
-            };
-            true
+                };
+                true
+            });
         });
-    });
-    (Chassis(for_extern, is_available_clone), to_extern)
+        (chassis_clone, to_extern)
+    }
 }
 
 struct TrajectoryPredictor {

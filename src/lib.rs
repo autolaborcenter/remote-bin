@@ -56,8 +56,8 @@ impl Robot {
         } else {
             unbounded().1
         };
-        let (chassis, from_chassis) = chassis::supervisor();
-        let (lidar, from_lidar) = lidar::supervisor();
+        let (chassis, from_chassis) = Chassis::supervisor();
+        let (lidar, from_lidar) = Lidar::supervisor();
         let (event, to_extern) = unbounded();
 
         let robot = Self {
@@ -162,25 +162,23 @@ impl Robot {
                     // 轨迹预测
                     if let Some(tr) = self.chassis.predict(target).await {
                         // 碰撞预警
-                        if let Some(ci) = self.lidar.check(tr).await {
-                            match ci {
-                                // 可能碰撞
-                                Some(CollisionInfo(time, Odometry { s, a, pose: _ }, p)) => {
-                                    if s < 0.20 && a < FRAC_PI_8 {
-                                        // 将在极小距离内碰撞
-                                        self.drive_and_warn(Physical::RELEASED, 1.0).await;
-                                    } else {
-                                        // 一般碰撞
-                                        let sec = time.as_secs_f32();
-                                        target.speed *= sec / 2.0;
-                                        self.drive_and_warn(target, f32::min(1.0, (2.0 - sec) * p))
-                                            .await;
-                                    }
+                        match self.lidar.check(tr).await {
+                            // 可能碰撞
+                            Some(CollisionInfo(time, Odometry { s, a, pose: _ }, p)) => {
+                                if s < 0.20 && a < FRAC_PI_8 {
+                                    // 将在极小距离内碰撞
+                                    self.drive_and_warn(Physical::RELEASED, 1.0).await;
+                                } else {
+                                    // 一般碰撞
+                                    let sec = time.as_secs_f32();
+                                    target.speed *= sec / 2.0;
+                                    self.drive_and_warn(target, f32::min(1.0, (2.0 - sec) * p))
+                                        .await;
                                 }
-                                // 不可能碰撞
-                                None => self.drive_and_warn(target, 0.0).await,
-                            };
-                        }
+                            }
+                            // 不可能碰撞
+                            None => self.drive_and_warn(target, 0.0).await,
+                        };
                     }
                 }
             }
@@ -219,18 +217,15 @@ mod macros {
         };
     }
 
-    macro_rules! call {
-        ($sender:expr; $command:expr, $value:expr) => {{
-            let mut result = None;
-            let (sender, receiver) = async_std::channel::bounded(1);
-            if let Ok(_) = (&$sender).send($command($value, sender)).await {
-                while let Ok(r) = receiver.recv().await {
-                    result = Some(r);
+    macro_rules! join_async {
+        ($($tokens:tt)*) => {
+            async_std::task::block_on(async {
+                futures::join! {
+                    $( $tokens )*
                 }
-            }
-            result
-        }};
+            });
+        };
     }
 
-    pub(crate) use {call, send_async};
+    pub(crate) use {join_async, send_async};
 }
