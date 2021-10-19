@@ -3,9 +3,7 @@ use async_std::{
     sync::{Arc, Mutex},
     task,
 };
-use chassis::Chassis;
 use futures::join;
-use lidar::Lidar;
 use parry2d::na::{Isometry2, Vector2};
 use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
@@ -18,6 +16,9 @@ use std::{
 mod chassis;
 mod lidar;
 mod rtk;
+
+use chassis::Chassis;
+use lidar::Lidar;
 
 type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
@@ -158,19 +159,25 @@ impl Robot {
                 if target.speed == 0.0 {
                     self.drive_and_warn(target, 0.0).await;
                 } else {
+                    // 轨迹预测
                     if let Some(tr) = self.chassis.predict(target).await {
+                        // 碰撞预警
                         if let Some(ci) = self.lidar.check(tr).await {
                             match ci {
+                                // 可能碰撞
                                 Some(CollisionInfo(time, Odometry { s, a, pose: _ }, p)) => {
                                     if s < 0.20 && a < FRAC_PI_8 {
+                                        // 将在极小距离内碰撞
                                         self.drive_and_warn(Physical::RELEASED, 1.0).await;
                                     } else {
+                                        // 一般碰撞
                                         let sec = time.as_secs_f32();
                                         target.speed *= sec / 2.0;
                                         self.drive_and_warn(target, f32::min(1.0, (2.0 - sec) * p))
                                             .await;
                                     }
                                 }
+                                // 不可能碰撞
                                 None => self.drive_and_warn(target, 0.0).await,
                             };
                         }

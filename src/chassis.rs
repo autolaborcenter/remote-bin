@@ -63,6 +63,8 @@ pub(super) fn supervisor() -> (Chassis, Receiver<Event>) {
                 }
                 ConnectFailed => {
                     thread::sleep(Duration::from_secs(1));
+                    // 消费（拒绝）所有等待期间到来的请求
+                    while let Ok(_) = command.try_recv() {}
                 }
                 Event(chassis, e) => {
                     if let Some((time, e)) = e {
