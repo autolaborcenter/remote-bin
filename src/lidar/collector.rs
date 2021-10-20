@@ -1,7 +1,7 @@
 ﻿use super::Pose;
 use crate::{CollisionInfo, Trajectory};
 use async_std::sync::{Arc, Mutex};
-use lidar_faselase::{zip::PointZipped, Point};
+use lidar_faselase::{Point, PointZipped};
 use parry2d::{
     math::{self, Real},
     query::PointQuery,

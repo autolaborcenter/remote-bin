@@ -21,7 +21,7 @@ mod rtk;
 use chassis::Chassis;
 use lidar::Lidar;
 
-pub use lidar_faselase::zip::PointZipped;
+pub use lidar_faselase::PointZipped;
 pub use pm1_sdk::{
     model::{Odometry, Physical},
     PM1Status,
