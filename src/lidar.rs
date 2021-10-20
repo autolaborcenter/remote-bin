@@ -1,4 +1,4 @@
-﻿use super::{join_async, send_async, CollisionInfo, Trajectory};
+﻿use super::{join_async, send_async, CollisionInfo, Pose, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver},
     sync::Arc,
@@ -42,7 +42,18 @@ impl Lidar {
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
         let (event, to_extern) = unbounded();
-        let (group, mut collectors) = Group::build(&[(-0.141, 0.0, PI), (0.118, 0.0, 0.0)]);
+        let (group, mut collectors) = Group::build(&[
+            Pose {
+                x: -0.141,
+                y: 0.0,
+                theta: PI,
+            },
+            Pose {
+                x: 0.118,
+                y: 0.0,
+                theta: 0.0,
+            },
+        ]);
         let lidar_clone = Self {
             is_available: Arc::new(AtomicBool::new(false)),
             group,

@@ -1,4 +1,6 @@
-﻿use async_std::sync::{Arc, Mutex};
+﻿use super::Pose;
+use crate::{CollisionInfo, Trajectory};
+use async_std::sync::{Arc, Mutex};
 use lidar_faselase::{zip::PointZipped, Point};
 use parry2d::{
     math::{self, Real},
@@ -6,9 +8,7 @@ use parry2d::{
     shape::ConvexPolygon,
 };
 use pm1_sdk::model::Odometry;
-use std::{f32::consts::PI, time::Duration};
-
-use crate::{CollisionInfo, Trajectory};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub(super) struct Group(Vec<Points>);
@@ -16,7 +16,7 @@ pub(super) struct Group(Vec<Points>);
 pub(super) struct Collector {
     points: Points,
     bits: Vec<Vec<u8>>,
-    trans: (f32, f32, f32),
+    trans: Pose,
 }
 
 type Points = Arc<Mutex<Vec<Vec<math::Point<Real>>>>>;
@@ -28,7 +28,8 @@ impl Collector {
         let mut transed = Vec::with_capacity(section.len());
         for Point { len, dir } in section {
             let _ = zipped.extend(&PointZipped::new(len, dir).0);
-            transed.push(self.trans(len, dir));
+            let (x, y) = self.trans.transform_u16(len, dir);
+            transed.push(math::Point::new(x, y));
         }
         // 保存编码
         let ref mut bits = self.bits;
@@ -58,19 +59,10 @@ impl Collector {
         self.points.lock().await.clear();
         self.bits.clear();
     }
-
-    /// 极坐标/整型 -> 直角坐标/浮点
-    fn trans(&self, len: u16, dir: u16) -> math::Point<Real> {
-        let (x, y, t) = self.trans;
-        let len = len as f32 / 100.0;
-        let dir = dir as f32 * 2.0 * PI / 5760.0 + t;
-        let (sin, cos) = dir.sin_cos();
-        math::Point::new(cos * len + x, sin * len + y)
-    }
 }
 
 impl Group {
-    pub fn build(trans: &[(f32, f32, f32)]) -> (Self, Vec<Collector>) {
+    pub fn build(trans: &[Pose]) -> (Self, Vec<Collector>) {
         let collectors = trans
             .iter()
             .map(|trans| Collector {
@@ -131,7 +123,7 @@ impl Group {
     }
 }
 
-async fn extend_data<T: Sized>(s: &mut Vec<u8>, t: T) {
+fn extend_data<T: Sized>(s: &mut Vec<u8>, t: T) {
     s.extend(unsafe {
         std::slice::from_raw_parts(&t as *const _ as *const u8, std::mem::size_of::<T>())
     });

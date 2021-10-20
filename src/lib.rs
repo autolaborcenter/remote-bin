@@ -9,7 +9,8 @@ use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
-    f32::consts::FRAC_PI_8,
+    f32::consts::{FRAC_PI_8, PI},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -20,14 +21,19 @@ mod rtk;
 use chassis::Chassis;
 use lidar::Lidar;
 
+pub use lidar_faselase::zip::PointZipped;
 pub use pm1_sdk::{
     model::{Odometry, Physical},
     PM1Status,
 };
+pub use rtk_ins570::{Enu, WGS84};
 
-type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
-
-struct CollisionInfo(pub Duration, pub Odometry, pub f32);
+#[derive(Clone, Copy)]
+pub struct Pose {
+    pub x: f32,
+    pub y: f32,
+    pub theta: f32,
+}
 
 #[derive(Clone)]
 pub struct Robot {
@@ -42,12 +48,47 @@ pub struct Robot {
 pub enum Event {
     ChassisStatusUpdated(PM1Status),
     ChassisOdometerUpdated(f32, f32),
-    PoseUpdated(Isometry2<f32>),
+    PoseUpdated(bool, Pose),
     LidarFrameEncoded(Vec<u8>),
     CollisionDetected(f32),
 }
 
+type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
+
+struct CollisionInfo(pub Duration, pub Odometry, pub f32);
+
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500);
+
+impl From<Isometry2<f32>> for Pose {
+    fn from(src: Isometry2<f32>) -> Self {
+        Self {
+            x: src.translation.vector[0],
+            y: src.translation.vector[1],
+            theta: src.rotation.angle(),
+        }
+    }
+}
+
+impl Pose {
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        theta: 0.0,
+    };
+
+    pub(crate) fn transform_u16(&self, len: u16, dir: u16) -> (f32, f32) {
+        let Pose { x, y, theta } = self;
+        let len = len as f32 / 100.0;
+        let dir = dir as f32 * 2.0 * PI / 5760.0 + theta;
+        let (sin, cos) = dir.sin_cos();
+        (cos * len + x, sin * len + y)
+    }
+
+    #[inline]
+    pub fn transform_zipped(&self, p: PointZipped) -> (f32, f32) {
+        self.transform_u16(p.len(), p.dir())
+    }
+}
 
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
@@ -59,6 +100,7 @@ impl Robot {
         let (chassis, from_chassis) = Chassis::supervisor();
         let (lidar, from_lidar) = Lidar::supervisor();
         let (event, to_extern) = unbounded();
+        let rtk_initialized = Arc::new(AtomicBool::new(false));
 
         let robot = Self {
             chassis,
@@ -72,6 +114,7 @@ impl Robot {
         {
             let filter = filter.clone();
             let robot = robot.clone();
+            let rtk_initialized = rtk_initialized.clone();
             task::spawn(async move {
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
@@ -95,8 +138,9 @@ impl Robot {
                                             dir as f32,
                                         ),
                                     );
+                                    rtk_initialized.store(true, Ordering::Release);
                                     join!(
-                                        send_async!(Event::PoseUpdated(pose) => robot.event),
+                                        send_async!(Event::PoseUpdated(true, pose.into()) => robot.event),
                                         async { robot.automitic(pose).await }
                                     );
                                 }
@@ -120,9 +164,10 @@ impl Robot {
                         }
                         OdometryUpdated(t, o) => {
                             let pose = filter.lock().await.update(PoseType::Relative, t, o.pose);
+                            let rtk_initialized = rtk_initialized.load(Ordering::Acquire);
                             join!(
                                 send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
-                                send_async!(Event::PoseUpdated(pose) => robot.event),
+                                send_async!(Event::PoseUpdated(rtk_initialized, pose.into()) => robot.event),
                                 async { robot.automitic(pose).await }
                             );
                         }

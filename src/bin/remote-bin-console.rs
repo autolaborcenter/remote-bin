@@ -1,5 +1,5 @@
 ﻿use async_std::{channel::unbounded, net::UdpSocket, task};
-use robot_bin::{Odometry, PM1Status, Physical, Robot};
+use robot_bin::{PM1Status, Physical, Robot};
 use std::net::SocketAddr;
 
 enum Event {
@@ -68,7 +68,6 @@ async fn main() {
         physical: Physical::ZERO,
     };
     let mut odometer = (0.0, 0.0);
-    let mut _pose = Odometry::ZERO.pose;
     let mut risk = 0.0;
     loop {
         match receiver.recv().await {
@@ -88,7 +87,7 @@ async fn main() {
                 match e {
                     ChassisStatusUpdated(s) => status = s,
                     ChassisOdometerUpdated(s, a) => odometer = (s, a),
-                    PoseUpdated(p) => _pose = p,
+                    PoseUpdated(_, _) => {}
                     LidarFrameEncoded(buf) => {
                         if let Some(a) = address {
                             let _ = socket.send_to(buf.as_slice(), a).await;
