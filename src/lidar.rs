@@ -1,4 +1,4 @@
-﻿use super::{join_async, send_async, CollisionInfo, Odometry, Trajectory};
+﻿use super::{join_async, send_async, CollisionInfo, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver},
     sync::Arc,
@@ -15,14 +15,13 @@ use std::{
 };
 
 mod collector;
-mod collision;
 
-use collector::{Collector, XXXXX};
+use collector::Group;
 
 #[derive(Clone)]
 pub(super) struct Lidar {
     is_available: Arc<AtomicBool>,
-    points: [XXXXX; 2],
+    group: Group,
 }
 
 pub(super) enum Event {
@@ -35,9 +34,7 @@ impl Lidar {
     #[inline]
     pub async fn check(&self, trajectory: Trajectory) -> Option<CollisionInfo> {
         if self.is_available.load(Ordering::Relaxed) {
-            let ref p0 = self.points[0].0.lock().await;
-            let ref p1 = self.points[1].0.lock().await;
-            collision::detect(&[p0, p1], trajectory)
+            self.group.detect(trajectory).await
         } else {
             None
         }
@@ -45,13 +42,10 @@ impl Lidar {
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
         let (event, to_extern) = unbounded();
-        let mut collectors = [
-            Collector::new((-0.141, 0.0, PI)),
-            Collector::new((0.118, 0.0, 0.0)),
-        ];
+        let (group, mut collectors) = Group::build(&[(-0.141, 0.0, PI), (0.118, 0.0, 0.0)]);
         let lidar_clone = Self {
             is_available: Arc::new(AtomicBool::new(false)),
-            points: [collectors[0].points.clone(), collectors[1].points.clone()],
+            group,
         };
         let lidar = lidar_clone.clone();
         task::spawn_blocking(move || {
@@ -133,12 +127,10 @@ impl Lidar {
                         // 发送
                         if indexer.is_full() && now >= send_time {
                             send_time = now + Duration::from_millis(100);
-                            let mut buf = vec![255];
-                            join_async!(async {
-                                collectors[1].write_to(&mut buf).await;
-                                collectors[0].write_to(&mut buf).await;
-                                let _ = event.send(Event::FrameEncoded(buf)).await;
-                            });
+                            let mut buf = vec![0, 0];
+                            collectors[1].write_to(&mut buf);
+                            collectors[0].write_to(&mut buf);
+                            join_async!(send_async!(Event::FrameEncoded(buf) => event));
                         }
                     }
                 }

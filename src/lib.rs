@@ -10,6 +10,7 @@ use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
     f32::consts::FRAC_PI_8,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -36,6 +37,7 @@ pub struct Robot {
     event: Sender<Event>,
 
     artifical_deadline: Arc<Mutex<Instant>>,
+    pause: Arc<AtomicBool>,
     tracker: Arc<Mutex<Tracker>>,
 }
 
@@ -65,6 +67,7 @@ impl Robot {
             lidar,
             event,
             artifical_deadline: Arc::new(Mutex::new(Instant::now())),
+            pause: Arc::new(AtomicBool::new(false)),
             tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
         };
 
@@ -175,9 +178,15 @@ impl Robot {
         self.tracker.lock().await.stop_task();
     }
 
+    pub fn set_pause(&self, value: bool) {
+        self.pause.store(value, Ordering::Relaxed);
+    }
+
     async fn automitic(&self, pose: Isometry2<f32>) {
         if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
-            if *self.artifical_deadline.lock().await < Instant::now() {
+            if !self.pause.load(Ordering::Relaxed)
+                && *self.artifical_deadline.lock().await < Instant::now()
+            {
                 self.check_and_drive(Physical {
                     speed: 0.25,
                     rudder: -2.0 * (0.5 - frac),
