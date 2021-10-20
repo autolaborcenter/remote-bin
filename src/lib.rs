@@ -20,12 +20,12 @@ mod rtk;
 use chassis::Chassis;
 use lidar::Lidar;
 
-type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
-
 pub use pm1_sdk::{
     model::{Odometry, Physical},
     PM1Status,
 };
+
+type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
 struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
@@ -149,40 +149,70 @@ impl Robot {
         (robot.clone(), to_extern)
     }
 
-    pub async fn drive(&self, mut target: Physical) {
+    pub async fn drive(&self, target: Physical) {
         join!(
             async {
                 let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
                 *self.artifical_deadline.lock().await = deadline;
             },
-            async {
-                if target.speed == 0.0 {
-                    self.drive_and_warn(target, 0.0).await;
-                } else {
-                    // 轨迹预测
-                    if let Some(tr) = self.chassis.predict(target).await {
-                        // 碰撞预警
-                        match self.lidar.check(tr).await {
-                            // 可能碰撞
-                            Some(CollisionInfo(time, Odometry { s, a, pose: _ }, p)) => {
-                                if s < 0.20 && a < FRAC_PI_8 {
-                                    // 将在极小距离内碰撞
-                                    self.drive_and_warn(Physical::RELEASED, 1.0).await;
-                                } else {
-                                    // 一般碰撞
-                                    let sec = time.as_secs_f32();
-                                    target.speed *= sec / 2.0;
-                                    self.drive_and_warn(target, f32::min(1.0, (2.0 - sec) * p))
-                                        .await;
-                                }
-                            }
-                            // 不可能碰撞
-                            None => self.drive_and_warn(target, 0.0).await,
-                        };
-                    }
-                }
-            }
+            self.check_and_drive(target)
         );
+    }
+
+    pub async fn read(&self) -> Option<Vec<Isometry2<f32>>> {
+        self.tracker.lock().await.read("default").ok()
+    }
+
+    pub async fn record(&self) {
+        let _ = self.tracker.lock().await.record_to("default");
+    }
+
+    pub async fn track(&self) {
+        let _ = self.tracker.lock().await.track("default");
+    }
+
+    pub async fn stop(&self) {
+        self.tracker.lock().await.stop_task();
+    }
+
+    async fn automitic(&self, pose: Isometry2<f32>) {
+        if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
+            if *self.artifical_deadline.lock().await < Instant::now() {
+                self.check_and_drive(Physical {
+                    speed: 0.25,
+                    rudder: -2.0 * (0.5 - frac),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn check_and_drive(&self, mut p: Physical) {
+        if p.speed == 0.0 {
+            self.drive_and_warn(p, 0.0).await;
+        } else {
+            // 轨迹预测
+            if let Some(tr) = self.chassis.predict(p).await {
+                // 碰撞预警
+                match self.lidar.check(tr).await {
+                    // 可能碰撞
+                    Some(CollisionInfo(time, Odometry { s, a, pose: _ }, level)) => {
+                        if s < 0.20 && a < FRAC_PI_8 {
+                            // 将在极小距离内碰撞
+                            self.drive_and_warn(Physical::RELEASED, 1.0).await;
+                        } else {
+                            // 一般碰撞
+                            let sec = time.as_secs_f32();
+                            p.speed *= sec / 2.0;
+                            self.drive_and_warn(p, f32::min(1.0, (2.0 - sec) * level))
+                                .await;
+                        }
+                    }
+                    // 不可能碰撞
+                    None => self.drive_and_warn(p, 0.0).await,
+                };
+            }
+        }
     }
 
     #[inline]
@@ -191,19 +221,6 @@ impl Robot {
             self.chassis.drive(p),
             send_async!(Event::CollisionDetected(r) => self.event),
         );
-    }
-
-    #[inline]
-    async fn automitic(&self, pose: Isometry2<f32>) {
-        if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
-            if *self.artifical_deadline.lock().await < Instant::now() {
-                self.drive(Physical {
-                    speed: 0.25,
-                    rudder: -2.0 * (0.5 - frac),
-                })
-                .await;
-            }
-        }
     }
 }
 
