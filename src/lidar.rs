@@ -1,23 +1,29 @@
 ﻿use super::{join_async, send_async, CollisionInfo, Odometry, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver},
-    sync::{Arc, Mutex},
+    sync::Arc,
     task,
 };
 use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
-    FrameCollector, Point, D10,
+    Point, D10,
 };
 use std::{
-    f64::consts::PI,
+    f32::consts::PI,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
+mod collector;
 mod collision;
 
+use collector::{Collector, XXXXX};
+
 #[derive(Clone)]
-pub(super) struct Lidar(Arc<Inner>);
+pub(super) struct Lidar {
+    is_available: Arc<AtomicBool>,
+    points: [XXXXX; 2],
+}
 
 pub(super) enum Event {
     Connected,
@@ -25,16 +31,13 @@ pub(super) enum Event {
     FrameEncoded(Vec<u8>),
 }
 
-struct Inner {
-    is_available: AtomicBool,
-    frame: Mutex<[FrameCollector; 2]>,
-}
-
 impl Lidar {
     #[inline]
     pub async fn check(&self, trajectory: Trajectory) -> Option<CollisionInfo> {
-        if self.0.is_available.load(Ordering::Relaxed) {
-            collision::detect(self.0.frame.lock().await.as_ref(), trajectory)
+        if self.is_available.load(Ordering::Relaxed) {
+            let ref p0 = self.points[0].0.lock().await;
+            let ref p1 = self.points[1].0.lock().await;
+            collision::detect(&[p0, p1], trajectory)
         } else {
             None
         }
@@ -42,19 +45,14 @@ impl Lidar {
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
         let (event, to_extern) = unbounded();
-        let lidar_clone = Self(Arc::new(Inner {
-            is_available: AtomicBool::new(false),
-            frame: Mutex::new([
-                FrameCollector {
-                    trans: (-141, 0, PI),
-                    ..FrameCollector::new()
-                },
-                FrameCollector {
-                    trans: (118, 0, 0.0),
-                    ..FrameCollector::new()
-                },
-            ]),
-        }));
+        let mut collectors = [
+            Collector::new((-0.141, 0.0, PI)),
+            Collector::new((0.118, 0.0, 0.0)),
+        ];
+        let lidar_clone = Self {
+            is_available: Arc::new(AtomicBool::new(false)),
+            points: [collectors[0].points.clone(), collectors[1].points.clone()],
+        };
         let lidar = lidar_clone.clone();
         task::spawn_blocking(move || {
             const FILTERS: [fn(Point) -> bool; 2] = [
@@ -80,7 +78,7 @@ impl Lidar {
                         if let Some(i) = indexer.add(k.clone()) {
                             if i == 1 {
                                 // 1 号雷达就位，可以开始工作
-                                lidar.0.is_available.store(true, Ordering::Relaxed);
+                                lidar.is_available.store(true, Ordering::Relaxed);
                             }
                             // 为雷达设置过滤器
                             driver.send(FILTERS[i]);
@@ -91,8 +89,8 @@ impl Lidar {
                             }
                             // 挪动的雷达清除缓存
                             task::block_on(async {
-                                for c in &mut lidar.0.frame.lock().await[i..] {
-                                    c.clear();
+                                for c in &mut collectors[i..] {
+                                    c.clear().await;
                                 }
                             });
                         }
@@ -101,14 +99,14 @@ impl Lidar {
                         task::block_on(send_async!(Event::Disconnected => event));
                         if let Some(i) = indexer.remove(k) {
                             // 任何有序号的雷达移除，停止工作
-                            lidar.0.is_available.store(false, Ordering::Relaxed);
+                            lidar.is_available.store(false, Ordering::Relaxed);
                             // 前移到当前位置的雷达重设过滤器
                             for n in &mut need_update[i..] {
                                 *n = true;
                             }
                             task::block_on(async {
-                                for c in &mut lidar.0.frame.lock().await[i..] {
-                                    c.clear();
+                                for c in &mut collectors[i..] {
+                                    c.clear().await;
                                 }
                             });
                         }
@@ -127,9 +125,9 @@ impl Lidar {
                                 need_update[j] = false;
                             }
                             if let Some((_, (i, s))) = e {
-                                join_async!(async {
-                                    lidar.0.frame.lock().await[j].put(i as usize, s)
-                                });
+                                task::block_on(async {
+                                    collectors[j].put(i as usize, s).await;
+                                })
                             }
                         }
                         // 发送
@@ -137,9 +135,8 @@ impl Lidar {
                             send_time = now + Duration::from_millis(100);
                             let mut buf = vec![255];
                             join_async!(async {
-                                let frame = lidar.0.frame.lock().await;
-                                frame[1].write_to(&mut buf);
-                                frame[0].write_to(&mut buf);
+                                collectors[1].write_to(&mut buf).await;
+                                collectors[0].write_to(&mut buf).await;
                                 let _ = event.send(Event::FrameEncoded(buf)).await;
                             });
                         }

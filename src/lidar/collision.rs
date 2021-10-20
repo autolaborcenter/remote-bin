@@ -1,4 +1,4 @@
-﻿use super::{CollisionInfo, Duration, FrameCollector, Odometry, Trajectory};
+﻿use super::{CollisionInfo, Duration, Odometry, Trajectory};
 use parry2d::{
     math::{Point, Real},
     na::Isometry2,
@@ -6,7 +6,10 @@ use parry2d::{
     shape::ConvexPolygon,
 };
 
-pub(super) fn detect(frame: &[FrameCollector], trajectory: Trajectory) -> Option<CollisionInfo> {
+pub(super) fn detect(
+    frame: &[&Vec<Vec<Point<Real>>>],
+    trajectory: Trajectory,
+) -> Option<CollisionInfo> {
     let mut pose = Odometry::ZERO;
     let mut time = Duration::ZERO;
     let mut size = 1.0;
@@ -24,46 +27,40 @@ pub(super) fn detect(frame: &[FrameCollector], trajectory: Trajectory) -> Option
     panic!("Impossible!");
 }
 
-fn check(frame: &[FrameCollector], pose: Isometry2<f32>, size: f32) -> bool {
+fn check(frame: &[&Vec<Vec<Point<Real>>>], pose: Isometry2<f32>, size: f32) -> bool {
     let outline = ROBOT_OUTLINE
         .iter()
-        .map(|p| pose * transform(*p, size))
+        .map(|(x, y)| pose * Point::new(x * size, y * size))
         .collect();
     let outline = ConvexPolygon::from_convex_polyline(outline).unwrap();
     let aabb = outline.local_aabb();
     frame.iter().any(|c| {
-        c.sections.iter().any(|s| {
-            s.1.iter()
-                .map(|p| transform(*p, 1.0))
+        c.iter().any(|s| {
+            s.iter()
                 .filter(|p| aabb.contains_local_point(p))
-                .any(|p| outline.contains_local_point(&p))
+                .any(|p| outline.contains_local_point(p))
         })
     })
 }
 
-const ROBOT_OUTLINE: [(i16, i16); 16] = [
-    (250, 80),
-    (120, 140),
-    (100, 180),
-    (100, 260),
+const ROBOT_OUTLINE: [(f32, f32); 16] = [
+    (0.25, 0.8),
+    (0.12, 0.14),
+    (0.10, 0.18),
+    (0.10, 0.26),
     //
-    (-100, 260),
-    (-100, 180),
-    (-250, 180),
-    (-470, 120),
+    (-0.10, 0.26),
+    (-0.10, 0.18),
+    (-0.25, 0.18),
+    (-0.47, 0.12),
     //
-    (-470, -120),
-    (-250, -180),
-    (-100, -180),
-    (-100, -260),
+    (-0.47, -0.12),
+    (-0.25, -0.18),
+    (-0.10, -0.18),
+    (-0.10, -0.26),
     //
-    (100, -260),
-    (100, -180),
-    (120, -140),
-    (250, -80),
+    (0.10, -0.26),
+    (0.10, -0.18),
+    (0.12, -0.14),
+    (0.25, -0.8),
 ];
-
-fn transform(p: (i16, i16), mut size: f32) -> Point<Real> {
-    size /= 1000.0;
-    Point::new(p.0 as f32 * size, p.1 as f32 * size)
-}

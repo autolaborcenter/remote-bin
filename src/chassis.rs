@@ -6,8 +6,8 @@ use async_std::{
 };
 use pm1_sdk::{
     driver::{SupersivorEventForSingle::*, SupervisorForSingle},
-    model::{ChassisModel, Predictor},
-    PM1Event, PM1Status, CONTROL_PERIOD, PM1,
+    model::{ChassisModel, Optimizer, Predictor},
+    PM1Event, PM1Status, CONTROL_PERIOD, PM1, RUDDER_STEP,
 };
 use std::{
     thread,
@@ -27,7 +27,7 @@ pub(super) enum Event {
 
 struct Inner {
     target: Mutex<(Instant, Physical)>,
-    predictor: Mutex<Option<(ChassisModel, Predictor)>>,
+    predictor: Mutex<Option<(ChassisModel, Optimizer, Physical)>>,
 }
 
 impl Chassis {
@@ -44,17 +44,30 @@ impl Chassis {
             .lock()
             .await
             .clone()
-            .map(|(model, mut predictor)| {
-                predictor.target = p;
-                Box::new(TrajectoryPredictor { model, predictor }) as Trajectory
+            .map(|(model, optimizer, current)| {
+                Box::new(TrajectoryPredictor {
+                    model,
+                    predictor: Predictor {
+                        rudder_step: RUDDER_STEP,
+                        optimizer,
+                        current,
+                        target: p,
+                    },
+                }) as Trajectory
             })
     }
 
     #[inline]
     async fn set_current(&self, p: Physical) {
-        if let Some((_, pre)) = self.0.predictor.lock().await.as_mut() {
-            pre.current = p;
+        if let Some((_, _, current)) = self.0.predictor.lock().await.as_mut() {
+            *current = p;
         }
+    }
+
+    #[inline]
+    async fn set_predictor(&self, driver: &PM1) {
+        let (model, optimizer) = driver.predictor();
+        *self.0.predictor.lock().await = Some((model, optimizer, driver.status().physical))
     }
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
@@ -71,7 +84,7 @@ impl Chassis {
                 match e {
                     Connected(_, driver) => {
                         join_async!(
-                            async { *chassis.0.predictor.lock().await = Some(driver.predict()) },
+                            chassis.set_predictor(driver),
                             send_async!(Event::Connected => event),
                             send_async!(Event::StatusUpdated(*driver.status()) => event)
                         );
@@ -93,10 +106,9 @@ impl Chassis {
                                     send_async!(Event::OdometryUpdated(time, odometry) => event)
                                 );
                             } else {
-                                let status = driver.status();
                                 join_async!(
-                                    chassis.set_current(status.physical),
-                                    send_async!(Event::StatusUpdated(*status) => event),
+                                    chassis.set_current(driver.status().physical),
+                                    send_async!(Event::StatusUpdated(*driver.status()) => event),
                                 );
                             }
                         }
