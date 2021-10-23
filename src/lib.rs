@@ -28,7 +28,7 @@ pub use pm1_sdk::{
 };
 pub use rtk_ins570::{Enu, WGS84};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Pose {
     pub x: f32,
     pub y: f32,
