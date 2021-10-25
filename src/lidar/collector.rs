@@ -40,7 +40,7 @@ impl Collector {
         // 保存点云
         let ref mut points = self.points.lock().await;
         if points.len() <= i {
-            points.resize_with(i, || Vec::new());
+            points.resize_with(i + 1, || Vec::new());
         }
         points[i] = transed;
     }
