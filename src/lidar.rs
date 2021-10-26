@@ -44,12 +44,12 @@ impl Lidar {
         let (event, to_extern) = unbounded();
         let (group, mut collectors) = Group::build(&[
             Pose {
-                x: -0.141,
+                x: 0.118,
                 y: 0.0,
-                theta: PI,
+                theta: 0.0,
             },
             Pose {
-                x: 0.118,
+                x: -0.141,
                 y: 0.0,
                 theta: 0.0,
             },
@@ -62,13 +62,14 @@ impl Lidar {
         task::spawn_blocking(move || {
             const FILTERS: [fn(Point) -> bool; 2] = [
                 |Point { len: _, dir }| {
-                    const DEG90: u16 = 5760 / 4;
-                    const DEG30: u16 = DEG90 / 3;
-                    (DEG30 < dir && dir <= DEG90) || ((5760 - DEG90) < dir && dir <= (5760 - DEG30))
-                },
-                |Point { len: _, dir }| {
                     const LIMIT: u16 = 1375; // 5760 * 1.5 / 2π
                     dir < LIMIT || (5760 - LIMIT) <= dir
+                },
+                |Point { len: _, dir }| {
+                    const DEG180: u16 = 5760 / 2;
+                    const DEG90: u16 = DEG180 / 2;
+                    const DEG30: u16 = DEG90 / 3;
+                    (DEG90 < dir && dir <= DEG180 - DEG30) || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
                 },
             ];
 
