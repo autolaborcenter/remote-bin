@@ -17,10 +17,3 @@ futures = { version = "*", default-features = false, features = [
     "async-await",
 ] }
 parry2d = "*"
-
-# 减小二进制体积
-[profile.release]
-lto = true
-codegen-units = 1
-panic = 'abort'
-# strip -s target/release/...

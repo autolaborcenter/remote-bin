@@ -9,7 +9,6 @@ use lidar_faselase::{
     Point, D10,
 };
 use std::{
-    f32::consts::PI,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
