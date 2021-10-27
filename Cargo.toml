@@ -16,4 +16,4 @@ async-std = { version = "*", features = ["attributes", "unstable"] }
 futures = { version = "*", default-features = false, features = [
     "async-await",
 ] }
-parry2d = "*"
+parry2d = { version = "*", features = ["simd-stable"] }

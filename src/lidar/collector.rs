@@ -87,7 +87,12 @@ impl Group {
         let mut odom = Odometry::ZERO;
         let mut time = Duration::ZERO;
         let mut size = 1.0;
+        let mut i = 0;
         for (dt, dp) in trajectory {
+            i += 1;
+            if i % 4 != 0 {
+                continue;
+            }
             time += dt;
             if time > Duration::from_secs(2) {
                 return None;
@@ -130,7 +135,7 @@ fn extend_data<T: Sized>(s: &mut Vec<u8>, t: T) {
 }
 
 const ROBOT_OUTLINE: [(f32, f32); 16] = [
-    (0.25, 0.8),
+    (0.25, 0.08),
     (0.12, 0.14),
     (0.10, 0.18),
     (0.10, 0.26),
@@ -148,5 +153,5 @@ const ROBOT_OUTLINE: [(f32, f32); 16] = [
     (0.10, -0.26),
     (0.10, -0.18),
     (0.12, -0.14),
-    (0.25, -0.8),
+    (0.25, -0.08),
 ];
