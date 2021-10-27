@@ -4,6 +4,7 @@ use async_std::{
     sync::{Arc, Mutex},
     task,
 };
+use lidar_faselase::driver::Driver;
 use pm1_sdk::{
     driver::{SupersivorEventForSingle::*, SupervisorForSingle},
     model::{ChassisModel, Optimizer, Predictor},
@@ -99,6 +100,7 @@ impl Chassis {
                         thread::sleep(Duration::from_secs(1));
                     }
                     Event(driver, e) => {
+                        driver.send(*task::block_on(chassis.0.target.lock()));
                         if let Some((time, e)) = e {
                             if let PM1Event::Odometry(delta) = e {
                                 odometry += delta;

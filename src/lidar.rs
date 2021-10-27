@@ -68,7 +68,8 @@ impl Lidar {
                     const DEG180: u16 = 5760 / 2;
                     const DEG90: u16 = DEG180 / 2;
                     const DEG30: u16 = DEG90 / 3;
-                    (DEG90 < dir && dir <= DEG180 - DEG30) || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
+                    (DEG90 < dir && dir <= DEG180 - DEG30)
+                        || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
                 },
             ];
 
@@ -81,8 +82,8 @@ impl Lidar {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
                         if let Some(i) = indexer.add(k.clone()) {
-                            if i == 1 {
-                                // 1 号雷达就位，可以开始工作
+                            if indexer.is_full() {
+                                // 雷达就位，可以开始工作
                                 lidar.is_available.store(true, Ordering::Relaxed);
                             }
                             // 为雷达设置过滤器
