@@ -6,9 +6,10 @@ async fn main() {
     while let Ok(e) = events.recv().await {
         use robot_bin::Event::*;
         match e {
+            ConnectionModified(_) => {}
             ChassisStatusUpdated(_) => {}
             ChassisOdometerUpdated(_, _) => {}
-            PoseUpdated(_, _) => {}
+            PoseUpdated(_) => {}
             LidarFrameEncoded(_) => {}
             CollisionDetected(_) => {}
         }

@@ -1,4 +1,4 @@
-﻿use super::{join_async, send_async, CollisionInfo, Pose, Trajectory};
+﻿use super::{send_async, CollisionInfo, Pose, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver},
     task,
@@ -73,8 +73,8 @@ impl Lidar {
                     }
                     Disconnected(k) => {
                         task::block_on(send_async!(Event::Disconnected => event));
-                        // 任何有序号的雷达移除，停止工作
-                        if let Some(i) = indexer.remove(k) {
+                        // 挪动的雷达清除缓存
+                        if let Some(i) = indexer.remove(&k) {
                             task::block_on(collectors[i].clear());
                         }
                     }
@@ -87,14 +87,13 @@ impl Lidar {
                         let now = Instant::now();
                         // 更新
                         if let Some(j) = indexer.find(&k) {
+                            // 挪动的雷达更新过滤器并清除缓存
                             if indexer.update(j) {
                                 let _ = s.send(FILTERS[j]);
                                 task::block_on(collectors[j].clear());
                             }
                             if let Some((_, (i, s))) = e {
-                                task::block_on(async {
-                                    collectors[j].put(i as usize, s).await;
-                                })
+                                task::block_on(collectors[j].put(i as usize, s))
                             }
                         }
                         // 发送
@@ -103,7 +102,7 @@ impl Lidar {
                             let mut buf = vec![0, 0];
                             collectors[1].write_to(&mut buf);
                             collectors[0].write_to(&mut buf);
-                            join_async!(send_async!(Event::FrameEncoded(buf) => event));
+                            task::block_on(send_async!(Event::FrameEncoded(buf) => event));
                         }
                     }
                 }
