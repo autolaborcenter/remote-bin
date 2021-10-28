@@ -9,30 +9,27 @@ use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
-    f32::consts::{FRAC_PI_8, PI},
+    f32::consts::FRAC_PI_8,
     time::{Duration, Instant},
 };
 
 mod chassis;
+mod device_code;
 mod lidar;
+mod pose;
 mod rtk;
 
 use chassis::Chassis;
 use lidar::Lidar;
 
+pub use device_code::DeviceCode;
 pub use lidar_faselase::PointZipped;
 pub use pm1_sdk::{
     model::{Odometry, Physical},
     PM1Status,
 };
+pub use pose::Pose;
 pub use rtk_ins570::{Enu, WGS84};
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Pose {
-    pub x: f32,
-    pub y: f32,
-    pub theta: f32,
-}
 
 #[derive(Clone)]
 pub struct Robot {
@@ -45,7 +42,7 @@ pub struct Robot {
 }
 
 pub enum Event {
-    ConnectionModified(u32),
+    ConnectionModified(DeviceCode),
     ChassisStatusUpdated(PM1Status),
     ChassisOdometerUpdated(f32, f32),
     PoseUpdated(Pose),
@@ -59,37 +56,6 @@ struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500);
 
-impl From<Isometry2<f32>> for Pose {
-    fn from(src: Isometry2<f32>) -> Self {
-        Self {
-            x: src.translation.vector[0],
-            y: src.translation.vector[1],
-            theta: src.rotation.angle(),
-        }
-    }
-}
-
-impl Pose {
-    pub const ZERO: Self = Self {
-        x: 0.0,
-        y: 0.0,
-        theta: 0.0,
-    };
-
-    pub(crate) fn transform_u16(&self, len: u16, dir: u16) -> (f32, f32) {
-        let Pose { x, y, theta } = self;
-        let len = len as f32 / 100.0;
-        let dir = dir as f32 * 2.0 * PI / 5760.0 + theta;
-        let (sin, cos) = dir.sin_cos();
-        (cos * len + x, sin * len + y)
-    }
-
-    #[inline]
-    pub fn transform_zipped(&self, p: PointZipped) -> (f32, f32) {
-        self.transform_u16(p.len(), p.dir())
-    }
-}
-
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
         let rtk = if rtk {
@@ -100,7 +66,7 @@ impl Robot {
         let (chassis, from_chassis) = Chassis::supervisor();
         let (lidar, from_lidar) = Lidar::supervisor();
         let (event, to_extern) = unbounded();
-        let connections = Arc::new(Mutex::new(0u32));
+        let device_code = Arc::new(Mutex::new(DeviceCode::default()));
 
         let robot = Self {
             chassis,
@@ -114,27 +80,29 @@ impl Robot {
         {
             let filter = filter.clone();
             let robot = robot.clone();
-            let connections = connections.clone();
+            let device_code = device_code.clone();
             task::spawn(async move {
+                let mut state_mem = Default::default();
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
                     match e {
                         Connected => {
-                            let mut lock = connections.lock().await;
-                            if *lock & 0b10 == 0 {
-                                *lock |= 0b10;
-                                send_async!(Event::ConnectionModified(*lock) => robot.event).await;
+                            if let Some(code) = device_code.lock().await.set(1) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            let mut lock = connections.lock().await;
-                            if *lock & 0b10 == 1 {
-                                *lock &= !0b10;
-                                send_async!(Event::ConnectionModified(*lock) => robot.event).await;
+                            if let Some(code) = device_code.lock().await.clear(1) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         SolutionUpdated(t, s) => match s {
-                            Solution::Uninitialized(_) => {}
+                            Solution::Uninitialized(state) => {
+                                if state != state_mem {
+                                    state_mem = state;
+                                    println!("{}", state);
+                                }
+                            }
                             Solution::Data { state, enu, dir } => {
                                 let SolutionState {
                                     state_pos,
@@ -150,15 +118,17 @@ impl Robot {
                                             dir as f32,
                                         ),
                                     );
-                                    let mut lock = connections.lock().await;
-                                    if *lock & 0b100 == 0 {
-                                        *lock |= !0b100;
-                                        send_async!(Event::ConnectionModified(*lock) => robot.event).await;
+                                    if let Some(code) = device_code.lock().await.set(2) {
+                                        send_async!(Event::ConnectionModified(code) => robot.event)
+                                            .await;
                                     }
                                     join!(
                                         send_async!(Event::PoseUpdated(pose.into()) => robot.event),
                                         robot.automitic(pose),
                                     );
+                                } else if state != state_mem {
+                                    state_mem = state;
+                                    println!("{}", state);
                                 }
                             }
                         },
@@ -174,17 +144,13 @@ impl Robot {
                     use chassis::Event::*;
                     match e {
                         Connected => {
-                            let mut lock = connections.lock().await;
-                            if *lock & 0b1 == 1 {
-                                *lock &= !0b1;
-                                send_async!(Event::ConnectionModified(*lock) => robot.event).await;
+                            if let Some(code) = device_code.lock().await.set(0) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            let mut lock = connections.lock().await;
-                            if *lock & 0b1 == 1 {
-                                *lock &= !0b1;
-                                send_async!(Event::ConnectionModified(*lock) => robot.event).await;
+                            if let Some(code) = device_code.lock().await.clear(0) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         StatusUpdated(s) => {
@@ -195,7 +161,7 @@ impl Robot {
                             join!(
                                 send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
                                 send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                async { robot.automitic(pose).await }
+                                robot.automitic(pose),
                             );
                         }
                     }
@@ -253,10 +219,12 @@ impl Robot {
 
     async fn automitic(&self, pose: Isometry2<f32>) {
         if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
+            // frac>0.5 => 左转
+            // frac<0.5 => 右转
             if *self.artifical_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
                     speed: 0.25,
-                    rudder: -2.0 * (0.5 - frac),
+                    rudder: 2.0 * (0.5 - frac),
                 })
                 .await;
             }
