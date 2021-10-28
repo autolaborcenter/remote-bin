@@ -1,27 +1,20 @@
 ﻿use super::{join_async, send_async, CollisionInfo, Pose, Trajectory};
 use async_std::{
     channel::{unbounded, Receiver},
-    sync::Arc,
     task,
 };
 use lidar_faselase::{
     driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     Point, D10,
 };
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 mod collector;
 
 use collector::Group;
 
 #[derive(Clone)]
-pub(super) struct Lidar {
-    is_available: Arc<AtomicBool>,
-    group: Group,
-}
+pub(super) struct Lidar(Group);
 
 pub(super) enum Event {
     Connected,
@@ -32,11 +25,7 @@ pub(super) enum Event {
 impl Lidar {
     #[inline]
     pub async fn check(&self, trajectory: Trajectory) -> Option<CollisionInfo> {
-        if self.is_available.load(Ordering::Relaxed) {
-            self.group.detect(trajectory).await
-        } else {
-            None
-        }
+        self.0.detect(trajectory).await
     }
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
@@ -53,11 +42,6 @@ impl Lidar {
                 theta: 0.0,
             },
         ]);
-        let lidar_clone = Self {
-            is_available: Arc::new(AtomicBool::new(false)),
-            group,
-        };
-        let lidar = lidar_clone.clone();
         task::spawn_blocking(move || {
             const FILTERS: [fn(Point) -> bool; 2] = [
                 |Point { len: _, dir }| {
@@ -74,7 +58,6 @@ impl Lidar {
             ];
 
             let mut indexer = Indexer::new(2);
-            let mut need_update = [false, false];
             let mut send_time = Instant::now() + Duration::from_millis(100);
 
             SupervisorForMultiple::<D10>::new().join(2, |e| {
@@ -82,39 +65,17 @@ impl Lidar {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
                         if let Some(i) = indexer.add(k.clone()) {
-                            if indexer.is_full() {
-                                // 雷达就位，可以开始工作
-                                lidar.is_available.store(true, Ordering::Relaxed);
-                            }
                             // 为雷达设置过滤器
                             driver.send(FILTERS[i]);
-                            need_update[i] = false;
-                            // 后面的雷达需要重设过滤器
-                            for n in &mut need_update[i + 1..] {
-                                *n = true;
-                            }
                             // 挪动的雷达清除缓存
-                            task::block_on(async {
-                                for c in &mut collectors[i..] {
-                                    c.clear().await;
-                                }
-                            });
+                            task::block_on(collectors[i].clear());
                         }
                     }
                     Disconnected(k) => {
                         task::block_on(send_async!(Event::Disconnected => event));
+                        // 任何有序号的雷达移除，停止工作
                         if let Some(i) = indexer.remove(k) {
-                            // 任何有序号的雷达移除，停止工作
-                            lidar.is_available.store(false, Ordering::Relaxed);
-                            // 前移到当前位置的雷达重设过滤器
-                            for n in &mut need_update[i..] {
-                                *n = true;
-                            }
-                            task::block_on(async {
-                                for c in &mut collectors[i..] {
-                                    c.clear().await;
-                                }
-                            });
+                            task::block_on(collectors[i].clear());
                         }
                     }
                     ConnectFailed {
@@ -126,9 +87,9 @@ impl Lidar {
                         let now = Instant::now();
                         // 更新
                         if let Some(j) = indexer.find(&k) {
-                            if need_update[j] {
+                            if indexer.update(j) {
                                 let _ = s.send(FILTERS[j]);
-                                need_update[j] = false;
+                                task::block_on(collectors[j].clear());
                             }
                             if let Some((_, (i, s))) = e {
                                 task::block_on(async {
@@ -149,6 +110,6 @@ impl Lidar {
                 2
             });
         });
-        (lidar_clone, to_extern)
+        (Self(group), to_extern)
     }
 }
