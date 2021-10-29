@@ -127,6 +127,10 @@ impl Robot {
                                         robot.automitic(pose),
                                     );
                                 } else if state != state_mem {
+                                    if let Some(code) = device_code.lock().await.clear(2) {
+                                        send_async!(Event::ConnectionModified(code) => robot.event)
+                                            .await;
+                                    }
                                     state_mem = state;
                                     println!("{}", state);
                                 }
