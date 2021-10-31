@@ -10,6 +10,7 @@ use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
     f32::consts::FRAC_PI_8,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
     time::{Duration, Instant},
 };
 
@@ -25,7 +26,7 @@ use lidar::Lidar;
 pub use device_code::DeviceCode;
 pub use lidar_faselase::PointZipped;
 pub use pm1_sdk::{
-    model::{ChassisModel, Odometry, Optimizer, Physical, Predictor},
+    model::{Odometry, Physical},
     PM1Status,
 };
 pub use pose::Pose;
@@ -36,6 +37,8 @@ pub struct Robot {
     chassis: Chassis,
     lidar: Lidar,
     event: Sender<Event>,
+
+    direct_target: Arc<AtomicU64>,
 
     artifical_deadline: Arc<Mutex<Instant>>,
     tracker: Arc<Mutex<Tracker>>,
@@ -72,6 +75,7 @@ impl Robot {
             chassis,
             lidar,
             event,
+            direct_target: Arc::new(AtomicU64::new(*u64_of(&Physical::RELEASED))),
             artifical_deadline: Arc::new(Mutex::new(Instant::now())),
             tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
         };
@@ -201,6 +205,11 @@ impl Robot {
         );
     }
 
+    pub async fn predict(&self) -> Trajectory {
+        let target = self.direct_target.load(Relaxed);
+        self.chassis.predict(*physical_of(&target)).await
+    }
+
     pub async fn read(&self) -> Option<Vec<Isometry2<f32>>> {
         self.tracker.lock().await.read("default").ok()
     }
@@ -236,30 +245,29 @@ impl Robot {
     }
 
     async fn check_and_drive(&self, mut p: Physical) {
-        if p.speed == 0.0 {
+        // 保存目标状态
+        self.direct_target.store(*u64_of(&p), Relaxed);
+        // 目标是静止不动
+        if p.is_static() {
             self.drive_and_warn(p, 0.0).await;
-        } else {
-            // 轨迹预测
-            if let Some(tr) = self.chassis.predict(p).await {
-                // 碰撞预警
-                match self.lidar.check(tr).await {
-                    // 可能碰撞
-                    Some(CollisionInfo(time, Odometry { s, a, pose: _ }, level)) => {
-                        if s < 0.20 && a < FRAC_PI_8 {
-                            // 将在极小距离内碰撞
-                            self.drive_and_warn(Physical::RELEASED, 1.0).await;
-                        } else {
-                            // 一般碰撞
-                            let sec = time.as_secs_f32();
-                            p.speed *= sec / 2.0;
-                            self.drive_and_warn(p, f32::min(1.0, (2.0 - sec) * level))
-                                .await;
-                        }
-                    }
-                    // 不可能碰撞
-                    None => self.drive_and_warn(p, 0.0).await,
-                };
-            }
+        }
+        // 可能碰撞
+        else if let Some(collision) = self.lidar.check(self.chassis.predict(p).await).await {
+            let CollisionInfo(time, Odometry { s, a, pose: _ }, level) = collision;
+            let (p, r) = if s < 0.20 && a < FRAC_PI_8 {
+                // 将在极小距离内碰撞
+                (Physical::RELEASED, 1.0)
+            } else {
+                // 一般碰撞
+                let sec = time.as_secs_f32();
+                p.speed *= sec / 2.0;
+                (p, f32::min(1.0, (2.0 - sec) * level))
+            };
+            self.drive_and_warn(p, r).await;
+        }
+        // 不可能碰撞
+        else {
+            self.drive_and_warn(p, 0.0).await;
         }
     }
 
@@ -293,4 +301,14 @@ mod macros {
     }
 
     pub(crate) use {join_async, send_async};
+}
+
+#[inline]
+fn u64_of<'a>(p: &'a Physical) -> &'a u64 {
+    unsafe { *(&p as *const _ as *const _) }
+}
+
+#[inline]
+fn physical_of<'a>(c: &'a u64) -> &'a Physical {
+    unsafe { *(&c as *const _ as *const _) }
 }

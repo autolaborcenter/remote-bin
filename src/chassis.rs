@@ -7,8 +7,8 @@ use async_std::{
 use lidar_faselase::driver::Driver;
 use pm1_sdk::{
     driver::{SupersivorEventForSingle::*, SupervisorForSingle},
-    model::{ChassisModel, Optimizer, Predictor},
-    PM1Event, PM1Status, CONTROL_PERIOD, PM1, RUDDER_STEP,
+    model::TrajectoryPredictor,
+    PM1Event, PM1Status, PM1,
 };
 use std::{
     thread,
@@ -28,8 +28,10 @@ pub(super) enum Event {
 
 struct Inner {
     target: Mutex<(Instant, Physical)>,
-    predictor: Mutex<Option<(ChassisModel, Optimizer, Physical)>>,
+    predictor: Mutex<Box<Option<TrajectoryPredictor>>>,
 }
+
+struct NonePredictor;
 
 impl Chassis {
     #[inline]
@@ -39,43 +41,21 @@ impl Chassis {
     }
 
     #[inline]
-    pub async fn predict(&self, p: Physical) -> Option<Trajectory> {
-        self.0
-            .predictor
-            .lock()
-            .await
-            .clone()
-            .map(|(model, optimizer, current)| {
-                Box::new(TrajectoryPredictor {
-                    model,
-                    predictor: Predictor {
-                        rudder_step: RUDDER_STEP,
-                        optimizer,
-                        current,
-                        target: p,
-                    },
-                }) as Trajectory
-            })
-    }
-
-    #[inline]
-    async fn set_current(&self, p: Physical) {
-        if let Some((_, _, current)) = self.0.predictor.lock().await.as_mut() {
-            *current = p;
+    pub async fn predict(&self, p: Physical) -> Trajectory {
+        if let Some(ref pre) = self.0.predictor.lock().await.as_ref() {
+            let mut pre = Box::new(pre.clone());
+            pre.predictor.current = p;
+            pre as Trajectory
+        } else {
+            Box::new(NonePredictor) as Trajectory
         }
-    }
-
-    #[inline]
-    async fn set_predictor(&self, driver: &PM1) {
-        let (model, optimizer) = driver.predictor();
-        *self.0.predictor.lock().await = Some((model, optimizer, driver.status().physical))
     }
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
         let (event, to_extern) = unbounded();
         let chassis_clone = Self(Arc::new(Inner {
             target: Mutex::new((Instant::now(), Physical::RELEASED)),
-            predictor: Mutex::new(None),
+            predictor: Mutex::new(Box::new(None)),
         }));
         let chassis = chassis_clone.clone();
         task::spawn_blocking(move || {
@@ -92,7 +72,7 @@ impl Chassis {
                     }
                     Disconnected => {
                         join_async!(
-                            async { *chassis.0.predictor.lock().await = None },
+                            async { *chassis.0.predictor.lock().await = Box::new(None) },
                             send_async!(Event::Disconnected => event)
                         );
                     }
@@ -121,26 +101,24 @@ impl Chassis {
         });
         (chassis_clone, to_extern)
     }
+
+    #[inline]
+    async fn set_predictor(&self, driver: &PM1) {
+        *self.0.predictor.lock().await = Box::new(Some(driver.trajectory_predictor()));
+    }
+
+    #[inline]
+    async fn set_current(&self, p: Physical) {
+        if let Some(ref mut pre) = self.0.predictor.lock().await.as_mut() {
+            pre.predictor.current = p;
+        }
+    }
 }
 
-struct TrajectoryPredictor {
-    model: ChassisModel,
-    predictor: Predictor,
-}
-
-impl Iterator for TrajectoryPredictor {
+impl Iterator for NonePredictor {
     type Item = (Duration, Odometry);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.predictor.next() {
-            Some(Physical { speed, rudder }) => Some((
-                CONTROL_PERIOD,
-                self.model.physical_to_odometry(Physical {
-                    speed: speed * CONTROL_PERIOD.as_secs_f32(),
-                    rudder,
-                }),
-            )),
-            None => None,
-        }
+        None
     }
 }
