@@ -7,6 +7,7 @@ impl Default for DeviceCode {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl DeviceCode {
     pub(super) fn set(&mut self, i: usize) -> Option<Self> {
         let mask = 1 << i;

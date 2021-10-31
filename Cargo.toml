@@ -17,3 +17,7 @@ futures = { version = "*", default-features = false, features = [
     "async-await",
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
+
+[features]
+default = ["runtime"]
+runtime = []
