@@ -23,6 +23,7 @@ use chassis::Chassis;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
+pub type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
 #[derive(Clone)]
 pub struct Robot {
@@ -44,8 +45,6 @@ pub enum Event {
     LidarFrameEncoded(Vec<u8>),
     CollisionDetected(f32),
 }
-
-type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
 
 struct CollisionInfo(pub Duration, pub Odometry, pub f32);
 
