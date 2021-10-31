@@ -25,7 +25,7 @@ use lidar::Lidar;
 pub use device_code::DeviceCode;
 pub use lidar_faselase::PointZipped;
 pub use pm1_sdk::{
-    model::{Odometry, Physical},
+    model::{ChassisModel, Odometry, Optimizer, Physical, Predictor},
     PM1Status,
 };
 pub use pose::Pose;
