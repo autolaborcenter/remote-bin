@@ -11,7 +11,6 @@ use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
     f32::consts::FRAC_PI_8,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
     time::{Duration, Instant},
 };
 
@@ -30,8 +29,6 @@ pub struct Robot {
     chassis: Chassis,
     lidar: Lidar,
     event: Sender<Event>,
-
-    direct_target: Arc<AtomicU64>,
 
     artifical_deadline: Arc<Mutex<Instant>>,
     tracker: Arc<Mutex<Tracker>>,
@@ -66,7 +63,6 @@ impl Robot {
             chassis,
             lidar,
             event,
-            direct_target: Arc::new(AtomicU64::new(*u64_of(&Physical::RELEASED))),
             artifical_deadline: Arc::new(Mutex::new(Instant::now())),
             tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
         };
@@ -197,8 +193,7 @@ impl Robot {
     }
 
     pub async fn predict(&self) -> Trajectory {
-        let target = self.direct_target.load(Relaxed);
-        self.chassis.predict(*physical_of(&target)).await
+        self.chassis.predict().await
     }
 
     pub async fn read(&self) -> Option<Vec<Isometry2<f32>>> {
@@ -237,13 +232,13 @@ impl Robot {
 
     async fn check_and_drive(&self, mut p: Physical) {
         // 保存目标状态
-        self.direct_target.store(*u64_of(&p), Relaxed);
+        self.chassis.store_raw_target(p).await;
         // 目标是静止不动
         if p.is_static() {
             self.drive_and_warn(p, 0.0).await;
         }
         // 可能碰撞
-        else if let Some(collision) = self.lidar.check(self.chassis.predict(p).await).await {
+        else if let Some(collision) = self.lidar.check(self.chassis.predict().await).await {
             let CollisionInfo(time, Odometry { s, a, pose: _ }, level) = collision;
             let (p, r) = if s < 0.20 && a < FRAC_PI_8 {
                 // 将在极小距离内碰撞
@@ -292,14 +287,4 @@ mod macros {
     }
 
     pub(crate) use {join_async, send_async};
-}
-
-#[inline]
-fn u64_of<'a>(p: &'a Physical) -> &'a u64 {
-    unsafe { *(&p as *const _ as *const _) }
-}
-
-#[inline]
-fn physical_of<'a>(c: &'a u64) -> &'a Physical {
-    unsafe { *(&c as *const _ as *const _) }
 }

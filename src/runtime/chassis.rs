@@ -27,6 +27,7 @@ pub(super) enum Event {
 }
 
 struct Inner {
+    raw_target: Mutex<(Instant, Physical)>,
     target: Mutex<(Instant, Physical)>,
     predictor: Mutex<Box<Option<TrajectoryPredictor>>>,
 }
@@ -41,10 +42,20 @@ impl Chassis {
     }
 
     #[inline]
-    pub async fn predict(&self, p: Physical) -> Trajectory {
+    pub async fn store_raw_target(&self, p: Physical) {
+        *self.0.raw_target.lock().await = (Instant::now() + Duration::from_millis(500), p);
+    }
+
+    #[inline]
+    pub async fn predict(&self) -> Trajectory {
         if let Some(ref pre) = self.0.predictor.lock().await.as_ref() {
+            let (time, p) = *self.0.raw_target.lock().await;
             let mut pre = Box::new(pre.clone());
-            pre.predictor.current = p;
+            pre.predictor.target = if Instant::now() > time {
+                Physical::RELEASED
+            } else {
+                p
+            };
             pre as Trajectory
         } else {
             Box::new(NonePredictor) as Trajectory
@@ -53,8 +64,10 @@ impl Chassis {
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
         let (event, to_extern) = unbounded();
+        let now = Instant::now();
         let chassis_clone = Self(Arc::new(Inner {
-            target: Mutex::new((Instant::now(), Physical::RELEASED)),
+            raw_target: Mutex::new((now, Physical::RELEASED)),
+            target: Mutex::new((now, Physical::RELEASED)),
             predictor: Mutex::new(Box::new(None)),
         }));
         let chassis = chassis_clone.clone();
