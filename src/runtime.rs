@@ -78,12 +78,12 @@ impl Robot {
                     use rtk::Event::*;
                     match e {
                         Connected => {
-                            if let Some(code) = device_code.lock().await.set(1) {
+                            if let Some(code) = device_code.lock().await.set(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(1) {
+                            if let Some(code) = device_code.lock().await.clear(&[2, 4]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
@@ -109,7 +109,7 @@ impl Robot {
                                             dir as f32,
                                         ),
                                     );
-                                    if let Some(code) = device_code.lock().await.set(2) {
+                                    if let Some(code) = device_code.lock().await.set(&[3, 4]) {
                                         send_async!(Event::ConnectionModified(code) => robot.event)
                                             .await;
                                     }
@@ -118,7 +118,7 @@ impl Robot {
                                         robot.automitic(pose),
                                     );
                                 } else if state != state_mem {
-                                    if let Some(code) = device_code.lock().await.clear(2) {
+                                    if let Some(code) = device_code.lock().await.clear(&[4]) {
                                         send_async!(Event::ConnectionModified(code) => robot.event)
                                             .await;
                                     }
@@ -139,13 +139,26 @@ impl Robot {
                     use chassis::Event::*;
                     match e {
                         Connected => {
-                            if let Some(code) = device_code.lock().await.set(0) {
+                            if let Some(code) = device_code.lock().await.set(&[0]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(0) {
+                            if let Some(code) = device_code.lock().await.clear(&[0, 1]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
+                            }
+                        }
+                        PowerSwitchUpdated(b) => {
+                            if b {
+                                if let Some(code) = device_code.lock().await.set(&[1]) {
+                                    send_async!(Event::ConnectionModified(code) => robot.event)
+                                        .await;
+                                }
+                            } else {
+                                if let Some(code) = device_code.lock().await.clear(&[1]) {
+                                    send_async!(Event::ConnectionModified(code) => robot.event)
+                                        .await;
+                                }
                             }
                         }
                         StatusUpdated(s) => {

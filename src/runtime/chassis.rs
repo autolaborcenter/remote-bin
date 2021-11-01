@@ -23,6 +23,7 @@ pub(super) enum Event {
     Connected,
     Disconnected,
 
+    PowerSwitchUpdated(bool),
     StatusUpdated(PM1Status),
     OdometryUpdated(Instant, Odometry),
 }
@@ -90,18 +91,24 @@ impl Chassis {
                     }
                     Event(driver, e) => {
                         driver.send(*task::block_on(chassis.0.target.lock()));
-                        if let Some((time, e)) = e {
-                            if let PM1Event::Odometry(delta) = e {
+                        use PM1Event::*;
+                        match e {
+                            Some((time, Odometry(delta))) => {
                                 odometry += delta;
-                                join_async!(
-                                    send_async!(Event::OdometryUpdated(time, odometry) => event)
+                                task::block_on(
+                                    send_async!(Event::OdometryUpdated(time, odometry) => event),
                                 );
-                            } else {
+                            }
+                            Some((_, PowerSwitch(b))) => {
+                                task::block_on(send_async!(Event::PowerSwitchUpdated(b) => event));
+                            }
+                            Some(_) => {
                                 join_async!(
                                     chassis.set_current(driver.status().physical),
                                     send_async!(Event::StatusUpdated(*driver.status()) => event),
                                 );
                             }
+                            None => {}
                         }
                     }
                 };
