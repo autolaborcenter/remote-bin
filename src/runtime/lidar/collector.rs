@@ -19,6 +19,18 @@ pub(super) struct Collector {
     trans: Pose,
 }
 
+#[cfg(debug_assertions)]
+mod c {
+    pub const DETECT_STEP_S: f32 = 0.1;
+    pub const DETECT_STEP_A: f32 = std::f32::consts::PI / 9.0;
+}
+
+#[cfg(not(debug_assertions))]
+mod c {
+    pub const DETECT_STEP_S: f32 = 0.05;
+    pub const DETECT_STEP_A: f32 = std::f32::consts::PI / 18.0;
+}
+
 type Points = Arc<Mutex<Vec<Vec<math::Point<Real>>>>>;
 
 impl Collector {
@@ -84,23 +96,22 @@ impl Group {
             frame.push(x.lock().await)
         }
         // 迭代路径
-        let mut odom = Odometry::ZERO;
         let mut time = Duration::ZERO;
-        let mut size = 1.0;
-        let mut i = 0;
+        let mut odom = Odometry::ZERO;
+        let mut sub_odom = Odometry::ZERO;
         for (dt, dp) in trajectory {
-            i += 1;
-            if i % 4 != 0 {
-                continue;
-            }
             time += dt;
             if time > Duration::from_secs(2) {
-                return None;
+                break;
             }
-            size += dp.s;
-            odom += dp;
+            sub_odom += dp;
+            if sub_odom.s < c::DETECT_STEP_S && sub_odom.a < c::DETECT_STEP_A {
+                continue;
+            }
+            odom += std::mem::replace(&mut sub_odom, Odometry::ZERO);
+            let size = odom.s + 1.0;
             // 检测碰撞
-            let any = {
+            if {
                 // 根据运行距离扩大轮廓
                 let outline = ROBOT_OUTLINE
                     .iter()
@@ -118,13 +129,11 @@ impl Group {
                             .any(|p| outline.contains_local_point(p))
                     })
                 })
-            };
-
-            if any {
+            } {
                 return Some(CollisionInfo(time, odom, 1.0 / size));
             }
         }
-        panic!("Impossible!");
+        None
     }
 }
 
