@@ -124,29 +124,41 @@ impl Group {
             if frame
                 .iter()
                 .flat_map(|c| c.iter().flatten())
-                .filter(|p| aabb.contains_local_point(p))
-                .any(|p| outline.contains_local_point(p))
+                .any(|p| aabb.contains_local_point(p) && outline.contains_local_point(p))
             {
-                // 测试势场
+                // 检测到碰撞
                 let risk = 1.0 / size;
+
+                // 计算斥力
                 let inv = odom.pose.inverse();
-                let force = if risk < 1.0 {
-                    let (n, f) = frame
-                        .iter()
-                        .flat_map(|c| c.iter().flatten())
-                        .map(|p| (inv * p).coords)
-                        .fold((0, Vector2::new(0.0, 0.0)), |(n, f), v| {
+                let force =
+                // 如果有一定规避空间
+                if risk < 1.0 {
+                    let (n, f) =
+                    // 展平
+                    frame.iter().flat_map(|c| c.iter().flatten())
+                    // 累加障碍点数和合力
+                    .fold(
+                        (0, Vector2::new(0.0, 0.0)),
+                        |(n, f), p| {
+                            let v = (inv * p).coords;
                             let squared = v.norm_squared();
                             if squared > 1.0 {
                                 (n, f)
                             } else {
                                 (n + 1, f - v / squared)
                             }
-                        });
+                        },
+                    );
+                    // 归一化
                     f / (n as f32 * time.as_secs_f32())
-                } else {
+                }
+                // 没有规避空间，不必计算
+                else {
                     Vector2::new(0.0, 0.0)
                 };
+
+                // 生成碰撞信息
                 return Some(CollisionInfo {
                     time,
                     pose: odom,

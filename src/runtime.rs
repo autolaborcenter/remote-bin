@@ -50,7 +50,9 @@ struct CollisionInfo {
     pub force: Vector2<f32>,
 }
 
-const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500);
+const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
+const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
+const TRACKING_SPEED: f32 = 0.4; // 循径速度
 
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
@@ -238,7 +240,7 @@ impl Robot {
             // frac<0.5 => 右转
             if *self.artifical_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
-                    speed: 0.25,
+                    speed: TRACKING_SPEED,
                     rudder: 2.0 * (0.5 - frac),
                 })
                 .await;
@@ -255,18 +257,17 @@ impl Robot {
         }
         // 可能碰撞
         else if let Some(collision) = self.lidar.check(self.chassis.predict().await).await {
-            let (p, r) = if collision.pose.s < 0.20 && collision.pose.a < FRAC_PI_8 {
+            let (p, r) = if collision.pose.s < 0.2 && collision.pose.a < FRAC_PI_8 {
                 // 将在极小距离内碰撞
                 (Physical::RELEASED, 1.0)
             } else {
                 // 一般碰撞
 
-                println!("force = {:?}", collision.force);
                 // 减速
                 let sec = collision.time.as_secs_f32();
                 p.speed *= sec / 2.0;
                 // 转向
-                let modifier = -collision.force[1].atan2(5.0);
+                let modifier = -collision.force[1].atan2(ACTIVE_COLLISION_AVOIDING);
                 p.rudder = if modifier > 0.0 {
                     f32::min(p.rudder + modifier, FRAC_PI_2)
                 } else {
