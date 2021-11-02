@@ -4,6 +4,7 @@ use async_std::sync::{Arc, Mutex};
 use lidar_faselase::{Point, PointZipped};
 use parry2d::{
     math::{self, Real},
+    na::Vector2,
     query::PointQuery,
     shape::ConvexPolygon,
 };
@@ -110,26 +111,31 @@ impl Group {
             }
             odom += std::mem::replace(&mut sub_odom, Odometry::ZERO);
             let size = odom.s + 1.0;
-            // 检测碰撞
-            if {
-                // 根据运行距离扩大轮廓
-                let outline = ROBOT_OUTLINE
+            // 根据运行距离扩大轮廓
+            let outline = ROBOT_OUTLINE
+                .iter()
+                .map(|(x, y)| odom.pose * math::Point::new(x * size, y * size))
+                .collect();
+            // 生成多边形
+            let outline = ConvexPolygon::from_convex_polyline(outline).unwrap();
+            // 计算包装盒，降低检测复杂度
+            let aabb = outline.local_aabb();
+            // 遍历检测碰撞
+            if frame
+                .iter()
+                .flat_map(|c| c.iter().flatten())
+                .filter(|p| aabb.contains_local_point(p))
+                .any(|p| outline.contains_local_point(p))
+            {
+                // 测试势场
+                let inv = odom.pose.inverse();
+                let f = frame
                     .iter()
-                    .map(|(x, y)| odom.pose * math::Point::new(x * size, y * size))
-                    .collect();
-                // 生成多边形
-                let outline = ConvexPolygon::from_convex_polyline(outline).unwrap();
-                // 计算包装盒，降低检测复杂度
-                let aabb = outline.local_aabb();
-                // 遍历检测碰撞
-                frame.iter().any(|c| {
-                    c.iter().any(|s| {
-                        s.iter()
-                            .filter(|p| aabb.contains_local_point(p))
-                            .any(|p| outline.contains_local_point(p))
-                    })
-                })
-            } {
+                    .flat_map(|c| c.iter().flatten())
+                    .map(|p| (inv * p).coords)
+                    .filter(|v| v.norm_squared() < 1.0)
+                    .fold(Vector2::new(0f32, 0f32), |f, v| f - v);
+                println!("f = ({:.3}, {:.3})", f[0], f[1]);
                 return Some(CollisionInfo(time, odom, 1.0 / size));
             }
         }

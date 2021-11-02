@@ -9,9 +9,9 @@ use lidar_faselase::{
 };
 use std::time::{Duration, Instant};
 
-mod collector;
+mod group;
 
-use collector::Group;
+use group::Group;
 
 #[derive(Clone)]
 pub(super) struct Lidar(Group);
