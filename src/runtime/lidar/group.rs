@@ -62,8 +62,8 @@ impl Collector {
     pub fn write_to(&self, buf: &mut Vec<u8>) {
         let len = self.bits.iter().map(|v| v.len()).sum::<usize>();
         buf.reserve(len + std::mem::size_of::<u16>());
-        let _ = extend_data(buf, len as u16);
-        let _ = extend_data(buf, self.trans);
+        let _ = buf.extend(bytes_of(&(len as u16)));
+        let _ = buf.extend(bytes_of(&self.trans));
         self.bits.iter().for_each(|v| buf.extend(v));
     }
 
@@ -190,16 +190,18 @@ impl Force {
         self.value += v;
     }
 
-    fn get(self) -> Vector2<f32> {
-        self.value / self.count as f32
+    fn get(&self) -> Vector2<f32> {
+        if self.count == 0 {
+            self.value
+        } else {
+            self.value / self.count as f32
+        }
     }
 }
 
 #[inline]
-fn extend_data<T: Sized>(s: &mut Vec<u8>, t: T) {
-    s.extend(unsafe {
-        std::slice::from_raw_parts(&t as *const _ as *const u8, std::mem::size_of::<T>())
-    });
+fn bytes_of<'a, T: Sized>(t: &'a T) -> &'a [u8] {
+    unsafe { std::slice::from_raw_parts(t as *const _ as *const u8, std::mem::size_of::<T>()) }
 }
 
 const ROBOT_OUTLINE: [(f32, f32); 16] = [
