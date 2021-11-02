@@ -23,7 +23,6 @@ pub(super) enum Event {
     Connected,
     Disconnected,
 
-    PowerSwitchUpdated(bool),
     StatusUpdated(PM1Status),
     OdometryUpdated(Instant, Odometry),
 }
@@ -74,10 +73,11 @@ impl Chassis {
             SupervisorForSingle::<PM1>::new().join(|e| {
                 match e {
                     Connected(_, driver) => {
+                        let status = driver.status();
                         join_async!(
                             chassis.set_predictor(driver),
                             send_async!(Event::Connected => event),
-                            send_async!(Event::StatusUpdated(*driver.status()) => event)
+                            send_async!(Event::StatusUpdated(*status) => event),
                         );
                     }
                     Disconnected => {
@@ -98,9 +98,6 @@ impl Chassis {
                                 task::block_on(
                                     send_async!(Event::OdometryUpdated(time, odometry) => event),
                                 );
-                            }
-                            Some((_, PowerSwitch(b))) => {
-                                task::block_on(send_async!(Event::PowerSwitchUpdated(b) => event));
                             }
                             Some(_) => {
                                 join_async!(

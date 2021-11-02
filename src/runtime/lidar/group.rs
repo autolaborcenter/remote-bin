@@ -131,18 +131,19 @@ impl Group {
                 let risk = 1.0 / size;
                 let inv = odom.pose.inverse();
                 let force = if risk < 1.0 {
-                    frame
+                    let (n, f) = frame
                         .iter()
                         .flat_map(|c| c.iter().flatten())
                         .map(|p| (inv * p).coords)
-                        .fold(Vector2::new(0.0, 0.0), |f, v| {
+                        .fold((0, Vector2::new(0.0, 0.0)), |(n, f), v| {
                             let squared = v.norm_squared();
                             if squared > 1.0 {
-                                f
+                                (n, f)
                             } else {
-                                f - v / squared
+                                (n + 1, f - v / squared)
                             }
-                        })
+                        });
+                    f / (n as f32 * time.as_secs_f32())
                 } else {
                     Vector2::new(0.0, 0.0)
                 };

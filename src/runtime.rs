@@ -10,7 +10,7 @@ use path_tracking::Tracker;
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
-    f32::consts::FRAC_PI_8,
+    f32::consts::{FRAC_PI_2, FRAC_PI_8},
     time::{Duration, Instant},
 };
 
@@ -153,8 +153,9 @@ impl Robot {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        PowerSwitchUpdated(b) => {
-                            if b {
+                        StatusUpdated(s) => {
+                            send_async!(Event::ChassisStatusUpdated(s) => robot.event).await;
+                            if s.power_switch {
                                 if let Some(code) = device_code.lock().await.set(&[1]) {
                                     send_async!(Event::ConnectionModified(code) => robot.event)
                                         .await;
@@ -165,9 +166,6 @@ impl Robot {
                                         .await;
                                 }
                             }
-                        }
-                        StatusUpdated(s) => {
-                            send_async!(Event::ChassisStatusUpdated(s) => robot.event).await;
                         }
                         OdometryUpdated(t, o) => {
                             let pose = filter.lock().await.update(PoseType::Relative, t, o.pose);
@@ -262,9 +260,19 @@ impl Robot {
                 (Physical::RELEASED, 1.0)
             } else {
                 // 一般碰撞
-                println!("f = ({:.3}, {:.3})", collision.force[0], collision.force[1]);
+
+                println!("force = {:?}", collision.force);
+                // 减速
                 let sec = collision.time.as_secs_f32();
                 p.speed *= sec / 2.0;
+                // 转向
+                let modifier = -collision.force[1].atan2(5.0);
+                p.rudder = if modifier > 0.0 {
+                    f32::min(p.rudder + modifier, FRAC_PI_2)
+                } else {
+                    f32::max(p.rudder + modifier, -FRAC_PI_2)
+                };
+
                 (p, f32::min(1.0, (2.0 - sec) * collision.risk))
             };
             self.drive_and_warn(p, r).await;
