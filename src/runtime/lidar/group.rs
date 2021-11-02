@@ -134,24 +134,27 @@ impl Group {
                 let force =
                 // 如果有一定规避空间
                 if risk < 1.0 {
-                    let (n, f) =
+                    let (l, r) =
                     // 展平
                     frame.iter().flat_map(|c| c.iter().flatten())
                     // 累加障碍点数和合力
                     .fold(
-                        (0, Vector2::new(0.0, 0.0)),
-                        |(n, f), p| {
+                        (Force::ZERO, Force::ZERO),
+                        |(mut l, mut r), p| {
                             let v = (inv * p).coords;
                             let squared = v.norm_squared();
-                            if squared > 1.0 {
-                                (n, f)
-                            } else {
-                                (n + 1, f - v / squared)
+                            if squared < 1.0 {
+                                if v[1] > 0.0 {
+                                    l.plus(-v / squared);
+                                } else {
+                                    r.plus(-v / squared);
+                                }
                             }
+                            (l, r)
                         },
                     );
                     // 归一化
-                    f / (n as f32 * time.as_secs_f32())
+                    (l.get() + r.get()) / size
                 }
                 // 没有规避空间，不必计算
                 else {
@@ -171,6 +174,28 @@ impl Group {
     }
 }
 
+struct Force {
+    count: usize,
+    value: Vector2<f32>,
+}
+
+impl Force {
+    const ZERO: Self = Self {
+        count: 0,
+        value: Vector2::new(0.0, 0.0),
+    };
+
+    fn plus(&mut self, v: Vector2<f32>) {
+        self.count += 1;
+        self.value += v;
+    }
+
+    fn get(self) -> Vector2<f32> {
+        self.value / self.count as f32
+    }
+}
+
+#[inline]
 fn extend_data<T: Sized>(s: &mut Vec<u8>, t: T) {
     s.extend(unsafe {
         std::slice::from_raw_parts(&t as *const _ as *const u8, std::mem::size_of::<T>())
