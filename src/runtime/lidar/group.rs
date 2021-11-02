@@ -128,15 +128,30 @@ impl Group {
                 .any(|p| outline.contains_local_point(p))
             {
                 // 测试势场
+                let risk = 1.0 / size;
                 let inv = odom.pose.inverse();
-                let f = frame
-                    .iter()
-                    .flat_map(|c| c.iter().flatten())
-                    .map(|p| (inv * p).coords)
-                    .filter(|v| v.norm_squared() < 1.0)
-                    .fold(Vector2::new(0f32, 0f32), |f, v| f - v);
-                println!("f = ({:.3}, {:.3})", f[0], f[1]);
-                return Some(CollisionInfo(time, odom, 1.0 / size));
+                let force = if risk < 1.0 {
+                    frame
+                        .iter()
+                        .flat_map(|c| c.iter().flatten())
+                        .map(|p| (inv * p).coords)
+                        .fold(Vector2::new(0.0, 0.0), |f, v| {
+                            let squared = v.norm_squared();
+                            if squared > 1.0 {
+                                f
+                            } else {
+                                f - v / squared
+                            }
+                        })
+                } else {
+                    Vector2::new(0.0, 0.0)
+                };
+                return Some(CollisionInfo {
+                    time,
+                    pose: odom,
+                    risk,
+                    force,
+                });
             }
         }
         None

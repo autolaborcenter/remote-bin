@@ -43,7 +43,12 @@ pub enum Event {
     CollisionDetected(f32),
 }
 
-struct CollisionInfo(pub Duration, pub Odometry, pub f32);
+struct CollisionInfo {
+    pub time: Duration,
+    pub pose: Odometry,
+    pub risk: f32,
+    pub force: Vector2<f32>,
+}
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -252,15 +257,15 @@ impl Robot {
         }
         // 可能碰撞
         else if let Some(collision) = self.lidar.check(self.chassis.predict().await).await {
-            let CollisionInfo(time, Odometry { s, a, pose: _ }, level) = collision;
-            let (p, r) = if s < 0.20 && a < FRAC_PI_8 {
+            let (p, r) = if collision.pose.s < 0.20 && collision.pose.a < FRAC_PI_8 {
                 // 将在极小距离内碰撞
                 (Physical::RELEASED, 1.0)
             } else {
                 // 一般碰撞
-                let sec = time.as_secs_f32();
+                println!("f = ({:.3}, {:.3})", collision.force[0], collision.force[1]);
+                let sec = collision.time.as_secs_f32();
                 p.speed *= sec / 2.0;
-                (p, f32::min(1.0, (2.0 - sec) * level))
+                (p, f32::min(1.0, (2.0 - sec) * collision.risk))
             };
             self.drive_and_warn(p, r).await;
         }
