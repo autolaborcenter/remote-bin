@@ -231,11 +231,11 @@ impl Robot {
     }
 
     async fn automitic(&self, pose: Isometry2<f32>) {
-        if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
+        if let Some((speed, rudder)) = self.tracker.lock().await.put_pose(&pose) {
             if *self.artifical_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
-                    speed: TRACKING_SPEED,
-                    rudder: frac,
+                    speed: TRACKING_SPEED * speed,
+                    rudder,
                 })
                 .await;
             }
