@@ -230,18 +230,12 @@ impl Robot {
         self.tracker.lock().await.stop_task();
     }
 
-    pub async fn set_pause(&self, value: bool) {
-        self.tracker.lock().await.pause = value;
-    }
-
     async fn automitic(&self, pose: Isometry2<f32>) {
         if let Some(frac) = self.tracker.lock().await.put_pose(&pose) {
-            // frac>0.5 => 左转
-            // frac<0.5 => 右转
             if *self.artifical_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
                     speed: TRACKING_SPEED,
-                    rudder: 2.0 * (0.5 - frac),
+                    rudder: frac,
                 })
                 .await;
             }
