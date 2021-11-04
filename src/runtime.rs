@@ -11,6 +11,7 @@ use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8},
+    sync::atomic::{AtomicU32, Ordering::Relaxed},
     time::{Duration, Instant},
 };
 
@@ -31,6 +32,7 @@ pub struct Robot {
     event: Sender<Event>,
 
     artifical_deadline: Arc<Mutex<Instant>>,
+    tracking_speed: Arc<AtomicU32>,
     tracker: Arc<Mutex<Tracker>>,
 }
 
@@ -52,7 +54,6 @@ struct CollisionInfo {
 
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
-const TRACKING_SPEED: f32 = 0.4; // 循径速度
 
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
@@ -71,6 +72,7 @@ impl Robot {
             lidar,
             event,
             artifical_deadline: Arc::new(Mutex::new(Instant::now())),
+            tracking_speed: Arc::new(AtomicU32::new(0.4f32.to_bits())),
             tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
         };
 
@@ -214,6 +216,10 @@ impl Robot {
         self.chassis.predict().await
     }
 
+    pub fn set_tracking_speed(&self, val: f32) {
+        self.tracking_speed.store(val.to_bits(), Relaxed);
+    }
+
     pub async fn read(&self) -> Option<Vec<Isometry2<f32>>> {
         self.tracker.lock().await.read("default").ok()
     }
@@ -234,7 +240,7 @@ impl Robot {
         if let Some((speed, rudder)) = self.tracker.lock().await.put_pose(&pose) {
             if *self.artifical_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
-                    speed: TRACKING_SPEED * speed,
+                    speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * speed,
                     rudder,
                 })
                 .await;
