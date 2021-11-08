@@ -4,7 +4,7 @@ use async_std::{
     task,
 };
 use lidar_faselase::{
-    driver::{Driver, Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
+    driver::{Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     Point, D10,
 };
 use std::time::{Duration, Instant};
@@ -66,7 +66,7 @@ impl Lidar {
                         task::block_on(send_async!(Event::Connected => event));
                         if let Some(i) = indexer.add(k.clone()) {
                             // 为雷达设置过滤器
-                            driver.send(FILTERS[i]);
+                            *driver.filter_mut() = FILTERS[i];
                             // 挪动的雷达清除缓存
                             task::block_on(collectors[i].clear());
                         }
