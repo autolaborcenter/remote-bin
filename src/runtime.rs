@@ -208,21 +208,19 @@ impl Robot {
         #[cfg(feature = "wired-joystick")]
         {
             let robot = robot.clone();
-            task::spawn(async move {
+            task::spawn_blocking(move || {
                 let mut joystick = joystick::Joystick::new();
                 loop {
                     let target = joystick.get();
                     if !target.is_released() {
-                        join!(
-                            async {
-                                let deadline = Instant::now() + JOYSTICK_TIMEOUT;
-                                *robot.joystick_deadline.lock().await = deadline;
-                            },
-                            robot.check_and_drive(target)
-                        );
-                        task::sleep(Duration::from_millis(50)).await;
+                        task::block_on(async {
+                            let deadline = Instant::now() + JOYSTICK_TIMEOUT;
+                            *robot.joystick_deadline.lock().await = deadline;
+                        });
+                        task::block_on(robot.check_and_drive(target));
+                        std::thread::sleep(Duration::from_millis(50));
                     } else {
-                        task::sleep(Duration::from_millis(400)).await;
+                        std::thread::sleep(Duration::from_millis(400));
                     }
                 }
             });
