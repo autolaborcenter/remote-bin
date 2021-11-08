@@ -19,6 +19,9 @@ mod chassis;
 mod lidar;
 mod rtk;
 
+#[cfg(feature = "wired-joystick")]
+mod joystick;
+
 use chassis::Chassis;
 use lidar::Lidar;
 
@@ -31,7 +34,8 @@ pub struct Robot {
     lidar: Lidar,
     event: Sender<Event>,
 
-    artifical_deadline: Arc<Mutex<Instant>>,
+    artificial_deadline: Arc<Mutex<Instant>>,
+    joystick_deadline: Arc<Mutex<Instant>>,
     tracking_speed: Arc<AtomicU32>,
     tracker: Arc<Mutex<Tracker>>,
 }
@@ -52,8 +56,9 @@ struct CollisionInfo {
     pub force: Vector2<f32>,
 }
 
+const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); //// 手柄控制保护期
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
-const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
+const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
 
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
@@ -67,12 +72,14 @@ impl Robot {
         let (event, to_extern) = unbounded();
         let device_code = Arc::new(Mutex::new(DeviceCode::default()));
 
+        let now = Instant::now();
         let robot = Self {
             chassis,
             lidar,
             event,
-            artifical_deadline: Arc::new(Mutex::new(Instant::now())),
-            tracking_speed: Arc::new(AtomicU32::new(0.4f32.to_bits())),
+            joystick_deadline: Arc::new(Mutex::new(now)),
+            artificial_deadline: Arc::new(Mutex::new(now)),
+            tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
             tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
         };
 
@@ -198,22 +205,30 @@ impl Robot {
                 }
             });
         }
+        #[cfg(feature = "wired-joystick")]
+        {
+            let robot = robot.clone();
+            task::spawn(async move {
+                let mut joystick = joystick::Joystick::new();
+                loop {
+                    let target = joystick.get();
+                    if !target.is_released() {
+                        join!(
+                            async {
+                                let deadline = Instant::now() + JOYSTICK_TIMEOUT;
+                                *robot.joystick_deadline.lock().await = deadline;
+                            },
+                            robot.check_and_drive(target)
+                        );
+                        task::sleep(Duration::from_millis(50)).await;
+                    } else {
+                        task::sleep(Duration::from_millis(400)).await;
+                    }
+                }
+            });
+        }
 
         (robot.clone(), to_extern)
-    }
-
-    pub async fn drive(&self, target: Physical) {
-        join!(
-            async {
-                let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
-                *self.artifical_deadline.lock().await = deadline;
-            },
-            self.check_and_drive(target)
-        );
-    }
-
-    pub async fn predict(&self) -> Trajectory {
-        self.chassis.predict().await
     }
 
     pub fn set_tracking_speed(&self, val: f32) {
@@ -236,9 +251,33 @@ impl Robot {
         self.tracker.lock().await.stop_task();
     }
 
+    pub async fn predict(&self) -> Trajectory {
+        self.chassis.predict().await
+    }
+
+    pub async fn drive(&self, target: Physical) {
+        #[cfg(not(feature = "wired-joystick"))]
+        if *self.joystick_deadline.lock().await >= Instant::now() {
+            return;
+        }
+
+        join!(
+            async {
+                let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
+                *self.artificial_deadline.lock().await = deadline;
+            },
+            self.check_and_drive(target)
+        );
+    }
+
     async fn automitic(&self, pose: Isometry2<f32>) {
+        #[cfg(not(feature = "wired-joystick"))]
+        if *self.joystick_deadline.lock().await >= Instant::now() {
+            return;
+        }
+
         if let Some((speed, rudder)) = self.tracker.lock().await.put_pose(&pose) {
-            if *self.artifical_deadline.lock().await < Instant::now() {
+            if *self.artificial_deadline.lock().await < Instant::now() {
                 self.check_and_drive(Physical {
                     speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * speed,
                     rudder,

@@ -17,7 +17,9 @@ futures = { version = "*", default-features = false, features = [
     "async-await",
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
+steering = { path = "../steering", optional = true, features = ["xbox360"] }
 
 [features]
-default = ["runtime"]
+default = ["runtime", "wired-joystick"]
 runtime = []
+wired-joystick = ["steering"]
