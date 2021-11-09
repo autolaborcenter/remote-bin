@@ -7,19 +7,21 @@ readme = "README.md"
 
 [dependencies]
 pm1-sdk = { path = "../pm1-sdk-3" }
-lidar-faselase = { path = "../lidar-faselase" }
+lidar-faselase = { path = "../lidar-faselase", optional = true }
+lidar-ld19 = { path = "../lidar-ld19", optional = true }
 rtk-ins570 = { path = "../rtk-ins570" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
 async-std = { version = "*", features = ["attributes", "unstable"] }
-# 只要个 join!
 futures = { version = "*", default-features = false, features = [
-    "async-await",
+    "async-await", # 只要个 join!
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
 steering = { path = "../steering", optional = true, features = ["xbox360"] }
 
 [features]
-default = ["runtime", "wired-joystick"]
+default = ["runtime", "wired-joystick", "faselase"]
 runtime = []
 wired-joystick = ["steering"]
+faselase = ["lidar-faselase"]
+ld19 = ["lidar-ld19"]

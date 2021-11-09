@@ -613,8 +613,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lidar"
+version = "0.1.0"
+dependencies = [
+ "driver",
+]
+
+[[package]]
 name = "lidar-faselase"
 version = "0.2.0"
+dependencies = [
+ "lidar",
+ "serial-port",
+]
+
+[[package]]
+name = "lidar-ld19"
+version = "0.1.0"
 dependencies = [
  "driver",
  "serial-port",
@@ -918,6 +933,7 @@ dependencies = [
  "async-std",
  "futures",
  "lidar-faselase",
+ "lidar-ld19",
  "parry2d",
  "path-tracking",
  "pm1-sdk",

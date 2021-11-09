@@ -3,15 +3,35 @@ use async_std::{
     channel::{unbounded, Receiver},
     task,
 };
-use lidar_faselase::{
-    driver::{Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
-    Point, D10,
-};
 use std::time::{Duration, Instant};
 
 mod group;
 
 use group::Group;
+use m::*;
+
+#[cfg(feature = "faselase")]
+mod m {
+    pub(super) use lidar_faselase::driver::{
+        Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple,
+    };
+    use lidar_faselase::{Point, D10};
+
+    pub(super) type Device = lidar_faselase::Lidar<D10>;
+    pub(super) const FILTERS: [fn(Point) -> bool; 2] = [
+        |Point { len: _, dir }| {
+            const DEG180: u16 = 5760 / 2;
+            const DEG90: u16 = DEG180 / 2;
+            const DEG30: u16 = DEG90 / 3;
+            (DEG90 < dir && dir <= DEG180 - DEG30)
+                || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
+        },
+        |Point { len: _, dir }| {
+            const LIMIT: u16 = 1375; // 5760 * 1.5 / 2π
+            dir < LIMIT || (5760 - LIMIT) <= dir
+        },
+    ];
+}
 
 #[derive(Clone)]
 pub(super) struct Lidar(Group);
@@ -43,24 +63,10 @@ impl Lidar {
             },
         ]);
         task::spawn_blocking(move || {
-            const FILTERS: [fn(Point) -> bool; 2] = [
-                |Point { len: _, dir }| {
-                    const DEG180: u16 = 5760 / 2;
-                    const DEG90: u16 = DEG180 / 2;
-                    const DEG30: u16 = DEG90 / 3;
-                    (DEG90 < dir && dir <= DEG180 - DEG30)
-                        || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
-                },
-                |Point { len: _, dir }| {
-                    const LIMIT: u16 = 1375; // 5760 * 1.5 / 2π
-                    dir < LIMIT || (5760 - LIMIT) <= dir
-                },
-            ];
-
             let mut indexer = Indexer::new(2);
             let mut send_time = Instant::now() + Duration::from_millis(100);
 
-            SupervisorForMultiple::<D10>::new().join(2, |e| {
+            SupervisorForMultiple::<Device>::new().join(2, |e| {
                 match e {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
