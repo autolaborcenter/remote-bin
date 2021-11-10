@@ -1,4 +1,4 @@
-﻿use lidar_faselase::PointZipped;
+﻿use crate::{Point, CONFIG};
 use parry2d::na::Isometry2;
 use std::f32::consts::PI;
 
@@ -19,6 +19,9 @@ impl From<Isometry2<f32>> for Pose {
     }
 }
 
+const METER_LEN: f32 = 1.0 / CONFIG.len_meter as f32;
+const RAD_DIR: f32 = 2.0 * PI / CONFIG.dir_round as f32;
+
 impl Pose {
     pub const ZERO: Self = Self {
         x: 0.0,
@@ -26,16 +29,11 @@ impl Pose {
         theta: 0.0,
     };
 
-    pub(crate) fn transform_u16(&self, len: u16, dir: u16) -> (f32, f32) {
+    pub fn transform_point(&self, p: Point) -> (f32, f32) {
         let Pose { x, y, theta } = self;
-        let len = len as f32 / 100.0;
-        let dir = dir as f32 * 2.0 * PI / 5760.0 + theta;
+        let len = p.len as f32 * METER_LEN;
+        let dir = p.dir as f32 * RAD_DIR + theta;
         let (sin, cos) = dir.sin_cos();
         (cos * len + x, sin * len + y)
-    }
-
-    #[inline]
-    pub fn transform_zipped(&self, p: PointZipped) -> (f32, f32) {
-        self.transform_u16(p.len(), p.dir())
     }
 }

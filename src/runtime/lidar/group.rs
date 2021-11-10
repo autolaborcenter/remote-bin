@@ -1,7 +1,6 @@
 ﻿use super::super::{CollisionInfo, Trajectory};
-use crate::Pose;
+use crate::{Point, Pose, CONFIG};
 use async_std::sync::{Arc, Mutex};
-use lidar_faselase::{Point, PointZipped};
 use parry2d::{
     math::{self, Real},
     na::Vector2,
@@ -10,6 +9,12 @@ use parry2d::{
 };
 use pm1_sdk::model::Odometry;
 use std::time::Duration;
+
+#[cfg(feature = "faselase")]
+pub use lidar_faselase::zip;
+
+#[cfg(feature = "ld19")]
+pub use lidar_ld19::zip;
 
 #[derive(Clone)]
 pub(super) struct Group(Vec<Points>);
@@ -37,11 +42,11 @@ type Points = Arc<Mutex<Vec<Vec<math::Point<Real>>>>>;
 impl Collector {
     pub async fn put(&mut self, i: usize, section: Vec<Point>) {
         // 变换
-        let mut zipped = Vec::with_capacity(section.len() * std::mem::size_of::<PointZipped>());
+        let mut zipped = Vec::with_capacity(section.len() * CONFIG.zipped_size);
         let mut transed = Vec::with_capacity(section.len());
-        for Point { len, dir } in section {
-            let _ = zipped.extend(&PointZipped::new(len, dir).0);
-            let (x, y) = self.trans.transform_u16(len, dir);
+        for p in section {
+            let _ = zipped.extend(zip(p));
+            let (x, y) = self.trans.transform_point(p);
             transed.push(math::Point::new(x, y));
         }
         // 保存编码

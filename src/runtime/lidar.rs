@@ -1,4 +1,5 @@
 ﻿use super::{send_async, CollisionInfo, Pose, Trajectory};
+use crate::Point;
 use async_std::{
     channel::{unbounded, Receiver},
     task,
@@ -12,23 +13,25 @@ use m::*;
 
 #[cfg(feature = "faselase")]
 mod m {
+    use super::Point;
     pub(super) use lidar_faselase::driver::{
         Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple,
     };
-    use lidar_faselase::{Point, D10};
+    use lidar_faselase::{CONFIG, D10};
+    use std::f32::consts::PI;
 
     pub(super) type Device = lidar_faselase::Lidar<D10>;
     pub(super) const FILTERS: [fn(Point) -> bool; 2] = [
         |Point { len: _, dir }| {
-            const DEG180: u16 = 5760 / 2;
+            const DEG180: u16 = CONFIG.dir_round / 2;
             const DEG90: u16 = DEG180 / 2;
             const DEG30: u16 = DEG90 / 3;
             (DEG90 < dir && dir <= DEG180 - DEG30)
                 || (DEG180 + DEG30 < dir && dir <= (DEG180 + DEG90))
         },
         |Point { len: _, dir }| {
-            const LIMIT: u16 = 1375; // 5760 * 1.5 / 2π
-            dir < LIMIT || (5760 - LIMIT) <= dir
+            const LIMIT: u16 = (CONFIG.dir_round as f32 * 1.5 / (2.0 * PI)) as u16;
+            dir < LIMIT || (CONFIG.dir_round - LIMIT) <= dir
         },
     ];
 }
@@ -72,7 +75,7 @@ impl Lidar {
                         task::block_on(send_async!(Event::Connected => event));
                         if let Some(i) = indexer.add(k.clone()) {
                             // 为雷达设置过滤器
-                            *driver.filter_mut() = FILTERS[i];
+                            driver.filter = FILTERS[i];
                             // 挪动的雷达清除缓存
                             task::block_on(collectors[i].clear());
                         }

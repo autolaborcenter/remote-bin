@@ -56,7 +56,9 @@ struct CollisionInfo {
     pub force: Vector2<f32>,
 }
 
-const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); //// 手柄控制保护期
+#[cfg(feature = "wired-joystick")]
+const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); // 手柄控制保护期
+
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
 
@@ -217,7 +219,7 @@ impl Robot {
                             let deadline = Instant::now() + JOYSTICK_TIMEOUT;
                             *robot.joystick_deadline.lock().await = deadline;
                         });
-                        task::block_on(robot.check_and_drive(target));
+                        task::block_on(robot.drive_and_warn(target, 0.0));
                         std::thread::sleep(Duration::from_millis(50));
                     } else {
                         std::thread::sleep(Duration::from_millis(400));
