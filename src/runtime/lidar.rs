@@ -80,6 +80,11 @@ impl Lidar {
                 match e {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
+                        // 为 LD19 设置置信度阈值
+                        #[cfg(feature = "ld19")]
+                        {
+                            *driver.inner.min_confidence() = 120;
+                        }
                         if let Some(i) = indexer.add(k.clone()) {
                             // 为雷达设置过滤器
                             driver.filter = FILTERS[i];
