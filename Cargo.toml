@@ -20,7 +20,7 @@ parry2d = { version = "*", features = ["simd-stable"] }
 steering = { path = "../steering", optional = true, features = ["xbox360"] }
 
 [features]
-default = ["runtime", "wired-joystick", "faselase"]
+default = ["runtime", "wired-joystick", "ld19"]
 runtime = []
 wired-joystick = ["steering"]
 faselase = ["lidar-faselase"]
