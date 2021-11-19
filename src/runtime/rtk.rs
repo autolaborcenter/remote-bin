@@ -3,7 +3,7 @@ use async_std::{
     channel::{unbounded, Receiver},
     task,
 };
-use pm1_sdk::driver::{SupersivorEventForSingle::*, SupervisorForSingle};
+use pm1_sdk::driver::{SupervisorEventForSingle::*, SupervisorForSingle};
 use rtk_ins570::{Solution, RTK};
 use std::{
     thread,
@@ -19,7 +19,7 @@ pub(super) enum Event {
 pub(super) fn supervisor() -> Receiver<Event> {
     let (sender, receiver) = unbounded();
     task::spawn_blocking(move || {
-        SupervisorForSingle::<RTK>::new().join(|e| {
+        SupervisorForSingle::<RTK>::default().join(|e| {
             match e {
                 Connected(_, _) => {
                     task::block_on(send_async!(Event::Connected => sender));

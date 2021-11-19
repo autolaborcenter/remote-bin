@@ -5,7 +5,7 @@ use async_std::{
     task,
 };
 use pm1_sdk::{
-    driver::{SupersivorEventForSingle::*, SupervisorForSingle},
+    driver::{SupervisorEventForSingle::*, SupervisorForSingle},
     model::TrajectoryPredictor,
     PM1Event, PM1Status, PM1,
 };
@@ -69,7 +69,7 @@ impl Chassis {
         task::spawn_blocking(move || {
             let mut odometry = Odometry::ZERO;
 
-            SupervisorForSingle::<PM1>::new().join(|e| {
+            SupervisorForSingle::<PM1>::default().join(|e| {
                 match e {
                     Connected(_, driver) => {
                         let status = driver.status();
