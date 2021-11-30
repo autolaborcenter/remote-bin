@@ -6,7 +6,6 @@ use async_std::{
 };
 use pm1_sdk::{
     driver::{SupervisorEventForSingle::*, SupervisorForSingle},
-    model::TrajectoryPredictor,
     PM1Event, PM1Status, PM1,
 };
 use std::{
@@ -29,7 +28,7 @@ pub(super) enum Event {
 struct Inner {
     raw_target: AtomicU64,
     target: Mutex<(Instant, Physical)>,
-    predictor: Mutex<Box<Option<TrajectoryPredictor>>>,
+    predictor: Mutex<Option<Trajectory>>,
 }
 
 struct NonePredictor;
@@ -47,14 +46,11 @@ impl Chassis {
     }
 
     #[inline]
-    pub async fn predict(&self) -> Trajectory {
-        if let Some(ref pre) = self.0.predictor.lock().await.as_ref() {
-            let mut pre = Box::new(pre.clone());
+    pub async fn predict(&self) -> Option<Trajectory> {
+        self.0.predictor.lock().await.clone().map(|mut pre| {
             pre.predictor.target = *physical_of(&self.0.raw_target.load(Relaxed));
-            pre as Trajectory
-        } else {
-            Box::new(NonePredictor) as Trajectory
-        }
+            pre
+        })
     }
 
     pub fn supervisor() -> (Self, Receiver<Event>) {
@@ -63,7 +59,7 @@ impl Chassis {
         let chassis_clone = Self(Arc::new(Inner {
             raw_target: AtomicU64::new(*u64_of(&Physical::RELEASED)),
             target: Mutex::new((now, Physical::RELEASED)),
-            predictor: Mutex::new(Box::new(None)),
+            predictor: Mutex::new(None),
         }));
         let chassis = chassis_clone.clone();
         task::spawn_blocking(move || {
@@ -81,7 +77,7 @@ impl Chassis {
                     }
                     Disconnected => {
                         join_async!(
-                            async { *chassis.0.predictor.lock().await = Box::new(None) },
+                            async { *chassis.0.predictor.lock().await = None },
                             send_async!(Event::Disconnected => event)
                         );
                     }
@@ -116,7 +112,7 @@ impl Chassis {
 
     #[inline]
     async fn set_predictor(&self, driver: &PM1) {
-        *self.0.predictor.lock().await = Box::new(Some(driver.trajectory_predictor()));
+        *self.0.predictor.lock().await = Some(Box::new(driver.trajectory_predictor()));
     }
 
     #[inline]

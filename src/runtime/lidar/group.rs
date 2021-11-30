@@ -102,11 +102,12 @@ impl Group {
             frame.push(x.lock().await)
         }
         // 迭代路径
+        let period = trajectory.period;
         let mut time = Duration::ZERO;
         let mut odom = Odometry::ZERO;
         let mut sub_odom = Odometry::ZERO;
-        for (dt, dp) in trajectory {
-            time += dt;
+        for dp in trajectory {
+            time += period;
             if time > Duration::from_secs(2) {
                 break;
             }

@@ -7,6 +7,7 @@ use async_std::{
 use futures::join;
 use parry2d::na::{Isometry2, Vector2};
 use path_tracking::Tracker;
+use pm1_sdk::model::{Pm1Predictor, TrajectoryPredictor, PM1};
 use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
@@ -26,7 +27,7 @@ use chassis::Chassis;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
-pub type Trajectory = Box<dyn Iterator<Item = (Duration, Odometry)> + Send>;
+pub type Trajectory = Box<TrajectoryPredictor<PM1, Pm1Predictor>>;
 
 #[derive(Clone)]
 pub struct Robot {
@@ -251,7 +252,7 @@ impl Robot {
         self.tracker.lock().await.stop_task();
     }
 
-    pub async fn predict(&self) -> Trajectory {
+    pub async fn predict(&self) -> Option<Trajectory> {
         self.chassis.predict().await
     }
 
@@ -295,7 +296,13 @@ impl Robot {
             self.drive_and_warn(p, 0.0).await;
         }
         // 可能碰撞
-        else if let Some(collision) = self.lidar.check(self.chassis.predict().await).await {
+        else if let Some(collision) = {
+            if let Some(tr) = self.chassis.predict().await {
+                self.lidar.check(tr).await
+            } else {
+                None
+            }
+        } {
             let (p, r) = if collision.pose.s < 0.2 && collision.pose.a < FRAC_PI_8 {
                 // 将在极小距离内碰撞
                 (Physical::RELEASED, 1.0)
