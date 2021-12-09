@@ -176,6 +176,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4521f3e3d031370679b3b140beb36dfe4801b09ac77e30c61941f97df3ef28b"
 
 [[package]]
+name = "base64"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -534,6 +540,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnss"
+version = "0.1.0"
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -724,6 +734,10 @@ dependencies = [
  "libc",
  "memoffset",
 ]
+
+[[package]]
+name = "nmea"
+version = "0.1.2"
 
 [[package]]
 name = "num-complex"
@@ -923,6 +937,7 @@ dependencies = [
  "pm1-sdk",
  "pose-filter",
  "rtk-ins570",
+ "rtk-qxwz",
  "steering",
 ]
 
@@ -933,6 +948,18 @@ dependencies = [
  "chrono",
  "driver",
  "num-traits",
+ "serial-port",
+]
+
+[[package]]
+name = "rtk-qxwz"
+version = "0.1.1"
+dependencies = [
+ "async-std",
+ "base64",
+ "driver",
+ "gnss",
+ "nmea",
  "serial-port",
 ]
 

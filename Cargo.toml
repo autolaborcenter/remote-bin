@@ -10,6 +10,7 @@ pm1-sdk = { path = "../pm1-sdk-3" }
 lidar-faselase = { path = "../lidar-faselase", optional = true }
 lidar-ld19 = { path = "../lidar-ld19", optional = true }
 rtk-ins570 = { path = "../rtk-ins570" }
+rtk-qxwz = { path = "../rtk-qxwz" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
 async-std = { version = "*", features = ["attributes", "unstable"] }
