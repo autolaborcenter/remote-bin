@@ -6,12 +6,12 @@ use async_std::{
 };
 use futures::join;
 use parry2d::na::{Isometry2, Vector2};
-use path_tracking::Tracker;
-use pm1_sdk::model::{Pm1Predictor, TrajectoryPredictor, PM1};
-use pose_filter::{InterpolationAndPredictionFilter, PoseFilter, PoseType};
+use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
+use pm1_sdk::model::{Pm1Predictor, TrajectoryPredictor};
+use pose_filter::{InterpolationFilter, PoseFilter, PoseType};
 use rtk_ins570::{Solution, SolutionState};
 use std::{
-    f32::consts::{FRAC_PI_2, FRAC_PI_8},
+    f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
     time::{Duration, Instant},
 };
@@ -27,7 +27,7 @@ use chassis::Chassis;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
-pub type Trajectory = Box<TrajectoryPredictor<PM1, Pm1Predictor>>;
+pub type Trajectory = Box<TrajectoryPredictor<Pm1Predictor>>;
 
 #[derive(Clone)]
 pub struct Robot {
@@ -38,7 +38,7 @@ pub struct Robot {
     artificial_deadline: Arc<Mutex<Instant>>,
     joystick_deadline: Arc<Mutex<Instant>>,
     tracking_speed: Arc<AtomicU32>,
-    tracker: Arc<Mutex<Tracker>>,
+    task: Arc<Mutex<Task>>,
 }
 
 pub enum Event {
@@ -55,6 +55,13 @@ struct CollisionInfo {
     pub pose: Odometry,
     pub risk: f32,
     pub force: Vector2<f32>,
+}
+
+enum Task {
+    Idle,
+    WaitingPose,
+    Record(RecordFile),
+    Track(Path, TrackContext),
 }
 
 #[cfg(feature = "wired-joystick")]
@@ -83,10 +90,10 @@ impl Robot {
             joystick_deadline: Arc::new(Mutex::new(now)),
             artificial_deadline: Arc::new(Mutex::new(now)),
             tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
-            tracker: Arc::new(Mutex::new(Tracker::new("path").unwrap())),
+            task: Arc::new(Mutex::new(Task::Idle)),
         };
 
-        let filter = Arc::new(Mutex::new(InterpolationAndPredictionFilter::new()));
+        let filter = Arc::new(Mutex::new(InterpolationFilter::new()));
         {
             let filter = filter.clone();
             let robot = robot.clone();
@@ -120,13 +127,11 @@ impl Robot {
                                     satellites: _,
                                 } = state;
                                 if state_pos > 40 && state_dir > 30 {
+                                    let (sin, cos) = (dir as f32).sin_cos();
                                     let pose = filter.lock().await.update(
                                         PoseType::Absolute,
                                         t,
-                                        Isometry2::new(
-                                            Vector2::new(enu.e as f32, enu.n as f32),
-                                            dir as f32,
-                                        ),
+                                        isometry(enu.e as f32, enu.n as f32, cos, sin),
                                     );
                                     if let Some(code) = device_code.lock().await.set(&[3, 4]) {
                                         send_async!(Event::ConnectionModified(code) => robot.event)
@@ -134,7 +139,7 @@ impl Robot {
                                     }
                                     join!(
                                         send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                        robot.automitic(pose),
+                                        robot.automatic(pose),
                                     );
                                 } else if state != state_mem {
                                     if let Some(code) = device_code.lock().await.clear(&[4]) {
@@ -186,7 +191,7 @@ impl Robot {
                             join!(
                                 send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
                                 send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                robot.automitic(pose),
+                                robot.automatic(pose),
                             );
                         }
                     }
@@ -236,20 +241,34 @@ impl Robot {
         self.tracking_speed.store(val.to_bits(), Relaxed);
     }
 
-    pub async fn read(&self) -> Option<Vec<Isometry2<f32>>> {
-        self.tracker.lock().await.read("default").ok()
+    pub async fn read_path() -> Option<Vec<Isometry2<f32>>> {
+        PathFile::open(build_path()).await.ok().map(|f| f.collect())
     }
 
     pub async fn record(&self) {
-        let _ = self.tracker.lock().await.record_to("default");
+        *self.task.lock().await = Task::WaitingPose;
     }
 
-    pub async fn track(&self) {
-        let _ = self.tracker.lock().await.track("default");
+    pub async fn track(&self) -> async_std::io::Result<()> {
+        let to_search = Sector {
+            radius: 4.0,
+            angle: PI,
+        };
+        let path = path_tracking::Path::new(PathFile::open(build_path()).await?, to_search, 10);
+        *self.task.lock().await = Task::Track(
+            path,
+            TrackContext::new(Parameters {
+                search_range: to_search,
+                light_radius: 0.4,
+                auto_reinitialize: true,
+                r#loop: false,
+            }),
+        );
+        Ok(())
     }
 
     pub async fn stop(&self) {
-        self.tracker.lock().await.stop_task();
+        *self.task.lock().await = Task::Idle;
     }
 
     pub async fn predict(&self) -> Option<Trajectory> {
@@ -271,19 +290,46 @@ impl Robot {
         );
     }
 
-    async fn automitic(&self, pose: Isometry2<f32>) {
-        #[cfg(not(feature = "wired-joystick"))]
-        if *self.joystick_deadline.lock().await >= Instant::now() {
-            return;
-        }
-
-        if let Some((speed, rudder)) = self.tracker.lock().await.put_pose(&pose) {
-            if *self.artificial_deadline.lock().await < Instant::now() {
-                self.check_and_drive(Physical {
-                    speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * speed,
-                    rudder,
-                })
-                .await;
+    async fn automatic(&self, pose: Isometry2<f32>) {
+        let mut task = self.task.lock().await;
+        match &mut *task {
+            Task::Idle => {}
+            Task::WaitingPose => {
+                if let Ok(r) = RecordFile::new(build_path(), pose).await {
+                    *task = Task::Record(r);
+                }
+            }
+            Task::Record(recorder) => {
+                if let Ok(true) = recorder.record(pose).await {
+                    println!(
+                        "saved: {:3} {:3} | {:1}°",
+                        pose.translation.vector[0],
+                        pose.translation.vector[1],
+                        pose.rotation.angle().to_degrees()
+                    )
+                }
+            }
+            Task::Track(path, context) => {
+                #[cfg(not(feature = "wired-joystick"))]
+                if *self.joystick_deadline.lock().await >= Instant::now() {
+                    return;
+                }
+                if *self.artificial_deadline.lock().await >= Instant::now() {
+                    return;
+                }
+                let clone = context.clone();
+                let mut tracker = Tracker {
+                    path: &path,
+                    context: clone,
+                };
+                if let Ok((k, rudder)) = tracker.track(pose) {
+                    self.check_and_drive(Physical {
+                        speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * k,
+                        rudder,
+                    })
+                    .await;
+                }
+                *context = tracker.context;
             }
         }
     }
@@ -339,6 +385,11 @@ impl Robot {
     }
 }
 
+#[inline]
+fn build_path() -> &'static async_std::path::Path {
+    async_std::path::Path::new("path/default.path")
+}
+
 use macros::*;
 mod macros {
     macro_rules! send_async {
@@ -360,4 +411,21 @@ mod macros {
     }
 
     pub(crate) use {join_async, send_async};
+}
+
+#[inline]
+const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
+    use parry2d::na::{Complex, Translation, Unit};
+    Isometry2 {
+        translation: Translation {
+            vector: vector(x, y),
+        },
+        rotation: Unit::new_unchecked(Complex { re: cos, im: sin }),
+    }
+}
+
+#[inline]
+const fn vector(x: f32, y: f32) -> Vector2<f32> {
+    use parry2d::na::{ArrayStorage, Vector};
+    Vector::from_array_storage(ArrayStorage([[x, y]]))
 }
