@@ -4,15 +4,13 @@ use async_std::{
     sync::{Arc, Mutex},
     task,
 };
+use lazy_static::lazy_static;
 use pm1_sdk::driver::{SupervisorEventForSingle::*, SupervisorForSingle};
 use rtk_ins570::{Solution, RTK};
 use rtk_qxwz::{
     encode_base64, nmea::NmeaLine, GpggaSender, QXWZAccount, QXWZService, RTCMReceiver, RTKBoard,
 };
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub(super) enum Event {
     Connected,
@@ -25,39 +23,50 @@ pub(super) fn supervisor() -> Receiver<Event> {
     let (sender, receiver) = unbounded();
     task::spawn_blocking(move || {
         SupervisorForSingle::<RTK>::default().join(|e| {
-            match e {
-                Connected(_, _) => {
-                    task::block_on(send_async!(Event::Connected => sender));
-                }
-                ConnectFailed => {
-                    thread::sleep(Duration::from_secs(1));
-                }
-                Disconnected => {
-                    task::block_on(send_async!(Event::Disconnected => sender));
-                }
-                Event(_, Some((time, solution))) => {
-                    task::block_on(send_async!(Event::SolutionUpdated(time, solution) => sender));
-                }
-                Event(_, None) => {}
-            };
+            task::block_on(async {
+                match e {
+                    Connected(_, _) => {
+                        send_async!(Event::Connected => sender).await;
+                    }
+                    ConnectFailed => {
+                        task::sleep(Duration::from_secs(1)).await;
+                    }
+                    Disconnected => {
+                        send_async!(Event::Disconnected => sender).await;
+                    }
+                    Event(_, Some((time, solution))) => {
+                        send_async!(Event::SolutionUpdated(time, solution) => sender).await;
+                    }
+                    Event(_, None) => {}
+                };
+            });
             true
         });
     });
     receiver
 }
 
-struct AuthFile;
+pub(crate) struct MutableQxAccount;
 
-impl QXWZAccount for AuthFile {
+lazy_static! {
+    static ref ACCOUNT: Mutex<String> = Default::default();
+}
+
+impl MutableQxAccount {
+    #[inline]
+    pub async fn set(text: &str) {
+        *ACCOUNT.lock().await = encode_base64(text);
+    }
+
+    #[inline]
+    pub async fn clear() {
+        ACCOUNT.lock().await.clear();
+    }
+}
+
+impl QXWZAccount for MutableQxAccount {
     fn get() -> Option<String> {
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|temp| temp.to_path_buf()))
-            .and_then(|mut path| {
-                path.push("auth");
-                std::fs::read_to_string(path).ok()
-            })
-            .and_then(|text| text.lines().next().map(|line| encode_base64(line)))
+        Some(task::block_on(ACCOUNT.lock()).clone()).filter(|s| !s.is_empty())
     }
 }
 
@@ -67,29 +76,36 @@ fn spawn_qxwz() {
     {
         let sender = sender.clone();
         let receiver = receiver.clone();
+
         task::spawn_blocking(move || {
-            SupervisorForSingle::<QXWZService<AuthFile>>::default().join(|e| {
-                task::block_on(async {
-                    match e {
-                        Connected(_, stream) => {
-                            *sender.lock().await = Some(stream.get_sender());
-                        }
-                        Disconnected => {
-                            *sender.lock().await = None;
-                        }
-                        Event(_, Some((_, buf))) => {
-                            if let Some(ref mut receiver) = *receiver.lock().await {
-                                receiver.receive(buf.as_slice());
+            let mut account = String::new();
+            loop {
+                SupervisorForSingle::<QXWZService<MutableQxAccount>>::default().join(|e| {
+                    task::block_on(async {
+                        match e {
+                            Connected(key, stream) => {
+                                println!("CONNECTED    qxwz tcp");
+                                *sender.lock().await = Some(stream.get_sender());
+                                account = key;
+                            }
+                            Disconnected => {
+                                eprintln!("DISCONNECTED qxwz tcp");
+                                *sender.lock().await = None;
+                            }
+                            Event(_, Some((_, buf))) => {
+                                if let Some(ref mut receiver) = *receiver.lock().await {
+                                    receiver.receive(buf.as_slice());
+                                }
+                            }
+                            Event(_, None) => {}
+                            ConnectFailed => {
+                                task::sleep(Duration::from_secs(3)).await;
                             }
                         }
-                        Event(_, None) => {}
-                        ConnectFailed => {
-                            task::sleep(Duration::from_secs(3)).await;
-                        }
-                    }
+                    });
+                    MutableQxAccount::get().map_or(false, |a| a == account)
                 });
-                true
-            });
+            }
         });
     }
     task::spawn_blocking(move || {
@@ -97,9 +113,11 @@ fn spawn_qxwz() {
             task::block_on(async {
                 match e {
                     Connected(_, board) => {
+                        println!("CONNECTED    qxwz serial");
                         *receiver.lock().await = Some(board.get_receiver());
                     }
                     Disconnected => {
+                        eprintln!("DISCONNECTED qxwz serial");
                         *receiver.lock().await = None;
                     }
                     Event(_, Some((_, (NmeaLine::GPGGA(_, tail), cs)))) => {

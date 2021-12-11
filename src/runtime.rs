@@ -70,6 +70,16 @@ const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); // 手柄控制�
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
 
+#[inline]
+pub async fn set_qx_account(text: &str) {
+    MutableQxAccount::set(text).await;
+}
+
+#[inline]
+pub async fn clear_qx_account() {
+    MutableQxAccount::clear().await;
+}
+
 impl Robot {
     pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
         let rtk = if rtk {
@@ -391,6 +401,8 @@ fn build_path() -> &'static async_std::path::Path {
 }
 
 use macros::*;
+
+use self::rtk::MutableQxAccount;
 mod macros {
     macro_rules! send_async {
         ($msg:expr => $sender:expr) => {

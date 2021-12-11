@@ -13,12 +13,14 @@ rtk-ins570 = { path = "../rtk-ins570" }
 rtk-qxwz = { path = "../rtk-qxwz" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
+steering = { path = "../steering", optional = true, features = ["xbox360"] }
+
 async-std = { version = "*", features = ["attributes", "unstable"] }
 futures = { version = "*", default-features = false, features = [
     "async-await", # 只要个 join!
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
-steering = { path = "../steering", optional = true, features = ["xbox360"] }
+lazy_static = "*"
 
 [features]
 default = ["runtime", "wired-joystick", "ld19"]
