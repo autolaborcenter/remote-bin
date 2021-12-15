@@ -1,8 +1,11 @@
-﻿use robot_bin::Robot;
+﻿use std::str::FromStr;
+
+use async_std::path::PathBuf;
+use robot_bin::Robot;
 
 #[async_std::main]
 async fn main() {
-    let (_robot, events) = Robot::spawn(false).await;
+    let (_robot, events) = Robot::spawn(PathBuf::from_str("").unwrap(), false).await;
     while let Ok(e) = events.recv().await {
         use robot_bin::Event::*;
         match e {

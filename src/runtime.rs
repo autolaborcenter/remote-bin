@@ -1,6 +1,7 @@
 ﻿use crate::{DeviceCode, Odometry, Physical, Pose};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
+    path::PathBuf,
     sync::{Arc, Mutex},
     task,
 };
@@ -27,10 +28,12 @@ use chassis::Chassis;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
+pub use rtk::reauth;
 pub type Trajectory = Box<TrajectoryPredictor<Pm1Predictor>>;
 
 #[derive(Clone)]
 pub struct Robot {
+    context_dir: PathBuf,
     chassis: Chassis,
     lidar: Lidar,
     event: Sender<Event>,
@@ -70,20 +73,10 @@ const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); // 手柄控制�
 const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
 
-#[inline]
-pub async fn set_qx_account(text: &str) {
-    MutableQxAccount::set(text).await;
-}
-
-#[inline]
-pub async fn clear_qx_account() {
-    MutableQxAccount::clear().await;
-}
-
 impl Robot {
-    pub async fn spawn(rtk: bool) -> (Self, Receiver<Event>) {
+    pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
         let rtk = if rtk {
-            rtk::supervisor()
+            rtk::supervisor(context_dir.clone())
         } else {
             unbounded().1
         };
@@ -93,7 +86,9 @@ impl Robot {
         let device_code = Arc::new(Mutex::new(DeviceCode::default()));
 
         let now = Instant::now();
+        context_dir.push("path");
         let robot = Self {
+            context_dir,
             chassis,
             lidar,
             event,
@@ -251,8 +246,11 @@ impl Robot {
         self.tracking_speed.store(val.to_bits(), Relaxed);
     }
 
-    pub async fn read_path() -> Option<Vec<Isometry2<f32>>> {
-        PathFile::open(build_path()).await.ok().map(|f| f.collect())
+    pub async fn read_path(&self) -> Option<Vec<Isometry2<f32>>> {
+        PathFile::open(self.context_dir.as_path())
+            .await
+            .ok()
+            .map(|f| f.collect())
     }
 
     pub async fn record(&self) {
@@ -264,7 +262,11 @@ impl Robot {
             radius: 4.0,
             angle: PI,
         };
-        let path = path_tracking::Path::new(PathFile::open(build_path()).await?, to_search, 10);
+        let path = path_tracking::Path::new(
+            PathFile::open(self.context_dir.as_path()).await?,
+            to_search,
+            10,
+        );
         *self.task.lock().await = Task::Track(
             path,
             TrackContext::new(Parameters {
@@ -305,7 +307,7 @@ impl Robot {
         match &mut *task {
             Task::Idle => {}
             Task::WaitingPose => {
-                if let Ok(r) = RecordFile::new(build_path(), pose).await {
+                if let Ok(r) = RecordFile::new(self.context_dir.as_path(), pose).await {
                     *task = Task::Record(r);
                 }
             }
@@ -395,14 +397,8 @@ impl Robot {
     }
 }
 
-#[inline]
-fn build_path() -> &'static async_std::path::Path {
-    async_std::path::Path::new("path/default.path")
-}
-
 use macros::*;
 
-use self::rtk::MutableQxAccount;
 mod macros {
     macro_rules! send_async {
         ($msg:expr => $sender:expr) => {

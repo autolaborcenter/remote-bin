@@ -1,6 +1,9 @@
 ﻿use super::send_async;
 use async_std::{
     channel::{unbounded, Receiver},
+    fs::File,
+    io::{prelude::BufReadExt, BufReader},
+    path::PathBuf,
     sync::{Arc, Mutex},
     task,
 };
@@ -18,7 +21,8 @@ pub(super) enum Event {
     SolutionUpdated(Instant, Solution),
 }
 
-pub(super) fn supervisor() -> Receiver<Event> {
+pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
+    *task::block_on(FILE_PATH.lock()) = dir;
     spawn_qxwz();
     let (sender, receiver) = unbounded();
     task::spawn_blocking(move || {
@@ -46,27 +50,33 @@ pub(super) fn supervisor() -> Receiver<Event> {
     receiver
 }
 
-pub(crate) struct MutableQxAccount;
-
 lazy_static! {
-    static ref ACCOUNT: Mutex<String> = Default::default();
+    static ref UPDATE_TIME: Mutex<Instant> = Mutex::new(Instant::now());
+    static ref FILE_PATH: Mutex<PathBuf> = Default::default();
 }
 
-impl MutableQxAccount {
-    #[inline]
-    pub async fn set(text: &str) {
-        *ACCOUNT.lock().await = encode_base64(text);
-    }
-
-    #[inline]
-    pub async fn clear() {
-        ACCOUNT.lock().await.clear();
-    }
+#[inline]
+pub async fn reauth() {
+    *UPDATE_TIME.lock().await = Instant::now();
 }
 
-impl QXWZAccount for MutableQxAccount {
+struct AuthFile;
+
+impl QXWZAccount for AuthFile {
     fn get() -> Option<String> {
-        Some(task::block_on(ACCOUNT.lock()).clone()).filter(|s| !s.is_empty())
+        task::block_on(async {
+            match File::open(FILE_PATH.lock().await.clone()).await {
+                Ok(file) => {
+                    let mut reader = BufReader::new(file);
+                    let mut line = String::new();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) | Err(_) => None,
+                        Ok(_) => Some(encode_base64(line)),
+                    }
+                }
+                Err(_) => None,
+            }
+        })
     }
 }
 
@@ -80,7 +90,8 @@ fn spawn_qxwz() {
         task::spawn_blocking(move || {
             let mut account = String::new();
             loop {
-                SupervisorForSingle::<QXWZService<MutableQxAccount>>::default().join(|e| {
+                let time = Instant::now();
+                SupervisorForSingle::<QXWZService<AuthFile>>::default().join(|e| {
                     task::block_on(async {
                         match e {
                             Connected(key, stream) => {
@@ -102,8 +113,8 @@ fn spawn_qxwz() {
                                 task::sleep(Duration::from_secs(3)).await;
                             }
                         }
-                    });
-                    MutableQxAccount::get().map_or(false, |a| a == account)
+                        *UPDATE_TIME.lock().await < time
+                    })
                 });
             }
         });
