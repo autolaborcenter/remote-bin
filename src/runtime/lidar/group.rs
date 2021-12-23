@@ -1,6 +1,7 @@
 ﻿use super::super::{CollisionInfo, Trajectory};
-use crate::{Point, Pose, CONFIG};
+use crate::{vector, Point, Pose, CONFIG};
 use async_std::sync::{Arc, Mutex};
+pub use lidar_ld19::zip;
 use parry2d::{
     math::{self, Real},
     na::Vector2,
@@ -9,12 +10,6 @@ use parry2d::{
 };
 use pm1_sdk::model::Odometry;
 use std::time::Duration;
-
-#[cfg(feature = "faselase")]
-pub use lidar_faselase::zip;
-
-#[cfg(feature = "ld19")]
-pub use lidar_ld19::zip;
 
 #[derive(Clone)]
 pub(super) struct Group(Vec<Points>);
@@ -47,7 +42,9 @@ impl Collector {
         for p in section {
             let _ = zipped.extend(zip(p));
             let (x, y) = self.trans.transform_point(p);
-            transed.push(math::Point::new(x, y));
+            transed.push(math::Point {
+                coords: vector(x, y),
+            });
         }
         // 保存编码
         let ref mut bits = self.bits;
@@ -120,7 +117,12 @@ impl Group {
             // 根据运行距离扩大轮廓
             let outline = ROBOT_OUTLINE
                 .iter()
-                .map(|(x, y)| odom.pose * math::Point::new(x * size, y * size))
+                .map(|(x, y)| {
+                    odom.pose
+                        * math::Point {
+                            coords: vector(*x, *y) * size,
+                        }
+                })
                 .collect();
             // 生成多边形
             let outline = ConvexPolygon::from_convex_polyline(outline).unwrap();
@@ -164,7 +166,7 @@ impl Group {
                 }
                 // 没有规避空间，不必计算
                 else {
-                    Vector2::new(0.0, 0.0)
+                    vector(0.0, 0.0)
                 };
 
                 // 生成碰撞信息
@@ -188,7 +190,7 @@ struct Force {
 impl Force {
     const ZERO: Self = Self {
         count: 0,
-        value: Vector2::new(0.0, 0.0),
+        value: vector(0.0, 0.0),
     };
 
     fn plus(&mut self, v: Vector2<f32>) {

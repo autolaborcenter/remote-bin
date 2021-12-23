@@ -12,23 +12,11 @@ use std::{
 mod group;
 
 use group::Group;
-use lidar::{
+use lidar_ld19::{
     driver::{Indexer, SupervisorEventForMultiple::*, SupervisorForMultiple},
     CONFIG,
 };
-use m::*;
-
-#[cfg(feature = "faselase")]
-mod m {
-    pub(super) use lidar_faselase as lidar;
-    pub(super) type Device = lidar::Lidar<lidar::D10>;
-}
-
-#[cfg(feature = "ld19")]
-mod m {
-    pub(super) use lidar_ld19 as lidar;
-    pub(super) type Device = lidar::Lidar<lidar::LD19>;
-}
+type LD19 = lidar_ld19::Lidar<lidar_ld19::LD19>;
 
 #[derive(Clone)]
 pub(super) struct Lidar(Group);
@@ -76,15 +64,12 @@ impl Lidar {
             let mut indexer = Indexer::new(2);
             let mut send_time = Instant::now() + Duration::from_millis(100);
 
-            SupervisorForMultiple::<Device>::new().join(2, |e| {
+            SupervisorForMultiple::<LD19>::new().join(2, |e| {
                 match e {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
                         // 为 LD19 设置置信度阈值
-                        #[cfg(feature = "ld19")]
-                        {
-                            *driver.inner.min_confidence() = 120;
-                        }
+                        *driver.inner.min_confidence() = 120;
                         if let Some(i) = indexer.add(k.clone()) {
                             // 为雷达设置过滤器
                             driver.filter = FILTERS[i];

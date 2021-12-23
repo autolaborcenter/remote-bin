@@ -99,6 +99,7 @@ impl Robot {
         };
 
         let filter = Arc::new(Mutex::new(InterpolationFilter::new()));
+        let time_origin = Instant::now();
         {
             let filter = filter.clone();
             let robot = robot.clone();
@@ -135,7 +136,7 @@ impl Robot {
                                     let (sin, cos) = (dir as f32).sin_cos();
                                     let pose = filter.lock().await.update(
                                         PoseType::Absolute,
-                                        t,
+                                        t - time_origin,
                                         isometry(enu.e as f32, enu.n as f32, cos, sin),
                                     );
                                     if let Some(code) = device_code.lock().await.set(&[3, 4]) {
@@ -192,7 +193,11 @@ impl Robot {
                             }
                         }
                         OdometryUpdated(t, o) => {
-                            let pose = filter.lock().await.update(PoseType::Relative, t, o.pose);
+                            let pose = filter.lock().await.update(
+                                PoseType::Relative,
+                                t - time_origin,
+                                o.pose,
+                            );
                             join!(
                                 send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
                                 send_async!(Event::PoseUpdated(pose.into()) => robot.event),
@@ -271,8 +276,7 @@ impl Robot {
             path,
             TrackContext::new(Parameters {
                 search_range: to_search,
-                light_radius: 0.4,
-                auto_reinitialize: true,
+                light_radius: 0.6,
                 r#loop: false,
             }),
         );
@@ -422,7 +426,7 @@ mod macros {
 }
 
 #[inline]
-const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
+pub(crate) const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
     use parry2d::na::{Complex, Translation, Unit};
     Isometry2 {
         translation: Translation {
@@ -433,7 +437,7 @@ const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
 }
 
 #[inline]
-const fn vector(x: f32, y: f32) -> Vector2<f32> {
+pub(crate) const fn vector(x: f32, y: f32) -> Vector2<f32> {
     use parry2d::na::{ArrayStorage, Vector};
     Vector::from_array_storage(ArrayStorage([[x, y]]))
 }

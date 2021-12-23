@@ -88,8 +88,8 @@ impl Chassis {
                         driver.set_target(*task::block_on(chassis.0.target.lock()));
                         use PM1Event::*;
                         match e {
-                            Some((time, Odometry(delta))) => {
-                                odometry += delta;
+                            Some((time, Wheels(wheels))) => {
+                                odometry += driver.model.wheels_to_velocity(wheels).to_odometry();
                                 task::block_on(
                                     send_async!(Event::OdometryUpdated(time, odometry) => event),
                                 );

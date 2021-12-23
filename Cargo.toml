@@ -1,14 +1,13 @@
 [package]
 name = "robot-bin"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
 readme = "README.md"
 
 [dependencies]
 pm1-sdk = { path = "../pm1-sdk-3" }
-lidar-faselase = { path = "../lidar-faselase", optional = true }
-lidar-ld19 = { path = "../lidar-ld19", optional = true }
+lidar-ld19 = { path = "../lidar-ld19" }
 rtk-ins570 = { path = "../rtk-ins570" }
 rtk-qxwz = { path = "../rtk-qxwz" }
 pose-filter = { path = "../pose-filter" }
@@ -23,8 +22,6 @@ parry2d = { version = "*", features = ["simd-stable"] }
 lazy_static = "*"
 
 [features]
-default = ["runtime", "wired-joystick", "ld19"]
+default = ["runtime", "wired-joystick"]
 runtime = []
 wired-joystick = ["steering"]
-faselase = ["lidar-faselase"]
-ld19 = ["lidar-ld19"]
