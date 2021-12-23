@@ -6,6 +6,7 @@ use async_std::{
 };
 use pm1_sdk::{
     driver::{SupervisorEventForSingle::*, SupervisorForSingle},
+    model::Wheels,
     PM1Event, PM1Status, PM1,
 };
 use std::{
@@ -22,7 +23,7 @@ pub(super) enum Event {
     Disconnected,
 
     StatusUpdated(PM1Status),
-    OdometryUpdated(Instant, Odometry),
+    WheelsUpdated(Instant, Wheels),
 }
 
 struct Inner {
@@ -63,8 +64,6 @@ impl Chassis {
         }));
         let chassis = chassis_clone.clone();
         task::spawn_blocking(move || {
-            let mut odometry = Odometry::ZERO;
-
             SupervisorForSingle::<PM1>::default().join(|e| {
                 match e {
                     Connected(_, driver) => {
@@ -89,9 +88,8 @@ impl Chassis {
                         use PM1Event::*;
                         match e {
                             Some((time, Wheels(wheels))) => {
-                                odometry += driver.model.wheels_to_velocity(wheels).to_odometry();
                                 task::block_on(
-                                    send_async!(Event::OdometryUpdated(time, odometry) => event),
+                                    send_async!(Event::WheelsUpdated(time, wheels) => event),
                                 );
                             }
                             Some(_) => {

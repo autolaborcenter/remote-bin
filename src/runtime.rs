@@ -6,11 +6,11 @@ use async_std::{
     task,
 };
 use futures::join;
-use parry2d::na::{Isometry2, Vector2};
+use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
-use pm1_sdk::model::{Pm1Predictor, TrajectoryPredictor};
-use pose_filter::{InterpolationFilter, PoseFilter, PoseType};
-use rtk_ins570::{Solution, SolutionState};
+use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
+use pose_filter::{ParticleFilter, ParticleFilterParameters};
+use rtk_ins570::Solution;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
@@ -98,7 +98,31 @@ impl Robot {
             task: Arc::new(Mutex::new(Task::Idle)),
         };
 
-        let filter = Arc::new(Mutex::new(InterpolationFilter::new()));
+        let filter = Arc::new(Mutex::new(ParticleFilter::new(
+            ParticleFilterParameters {
+                incremental_timeout: Duration::from_secs(3),
+                default_model: Pm1Model::default(),
+                memory_rate: 0.75,
+                count: 80,
+                measure_weight: 8.0,
+                beacon_on_robot: Point {
+                    coords: vector(-0.2, 0.0),
+                },
+                max_inconsistency: 0.2,
+            },
+            move |model, weight, size| {
+                let _k = (1.0 - weight) * 0.025;
+                (0..size)
+                    .map(|_| {
+                        Pm1Model::new(
+                            model.width,
+                            model.length,
+                            model.wheel, //* (1.0 + standard_gaussian.next() * k),
+                        )
+                    })
+                    .collect()
+            },
+        )));
         let time_origin = Instant::now();
         {
             let filter = filter.clone();
@@ -126,27 +150,16 @@ impl Robot {
                                     println!("{}", state);
                                 }
                             }
-                            Solution::Data { state, enu, dir } => {
-                                let SolutionState {
-                                    state_pos,
-                                    state_dir,
-                                    satellites: _,
-                                } = state;
-                                if state_pos > 40 && state_dir > 30 {
-                                    let (sin, cos) = (dir as f32).sin_cos();
-                                    let pose = filter.lock().await.update(
-                                        PoseType::Absolute,
+                            Solution::Data { state, enu, dir: _ } => {
+                                if state.state_pos > 40 {
+                                    filter.lock().await.measure(
                                         t - time_origin,
-                                        isometry(enu.e as f32, enu.n as f32, cos, sin),
+                                        point(enu.e as f32, enu.n as f32),
                                     );
                                     if let Some(code) = device_code.lock().await.set(&[3, 4]) {
                                         send_async!(Event::ConnectionModified(code) => robot.event)
                                             .await;
                                     }
-                                    join!(
-                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                        robot.automatic(pose),
-                                    );
                                 } else if state != state_mem {
                                     if let Some(code) = device_code.lock().await.clear(&[4]) {
                                         send_async!(Event::ConnectionModified(code) => robot.event)
@@ -165,6 +178,8 @@ impl Robot {
             let robot = robot.clone();
             // move: let filter = filter.clone();
             task::spawn(async move {
+                let mut s = 0.0;
+                let mut a = 0.0;
                 while let Ok(e) = from_chassis.recv().await {
                     use chassis::Event::*;
                     match e {
@@ -192,14 +207,19 @@ impl Robot {
                                 }
                             }
                         }
-                        OdometryUpdated(t, o) => {
-                            let pose = filter.lock().await.update(
-                                PoseType::Relative,
-                                t - time_origin,
-                                o.pose,
-                            );
+                        WheelsUpdated(t, wheels) => {
+                            let mut filter = filter.lock().await;
+                            filter.update(t - time_origin, wheels);
+                            let pose = filter.get();
+                            let odom = filter
+                                .parameters
+                                .default_model
+                                .wheels_to_velocity(wheels)
+                                .to_odometry();
+                            s += odom.s;
+                            a += odom.a;
                             join!(
-                                send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
+                                send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event),
                                 send_async!(Event::PoseUpdated(pose.into()) => robot.event),
                                 robot.automatic(pose),
                             );
@@ -426,18 +446,14 @@ mod macros {
 }
 
 #[inline]
-pub(crate) const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
-    use parry2d::na::{Complex, Translation, Unit};
-    Isometry2 {
-        translation: Translation {
-            vector: vector(x, y),
-        },
-        rotation: Unit::new_unchecked(Complex { re: cos, im: sin }),
-    }
-}
-
-#[inline]
 pub(crate) const fn vector(x: f32, y: f32) -> Vector2<f32> {
     use parry2d::na::{ArrayStorage, Vector};
     Vector::from_array_storage(ArrayStorage([[x, y]]))
+}
+
+#[inline]
+pub(crate) const fn point(x: f32, y: f32) -> Point2<f32> {
+    Point {
+        coords: vector(x, y),
+    }
 }
