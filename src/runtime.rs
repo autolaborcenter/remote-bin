@@ -9,7 +9,7 @@ use futures::join;
 use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
-use pose_filter::{Gaussian, ParticleFilter, ParticleFilterParameters};
+use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
 use rtk_ins570::Solution;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
@@ -18,6 +18,8 @@ use std::{
 };
 
 mod chassis;
+#[macro_use]
+mod filter;
 mod lidar;
 mod rtk;
 
@@ -98,32 +100,7 @@ impl Robot {
             task: Arc::new(Mutex::new(Task::Idle)),
         };
 
-        let mut standard_gaussian = Gaussian::new(0.0, 1.0);
-        let filter = Arc::new(Mutex::new(ParticleFilter::new(
-            ParticleFilterParameters {
-                incremental_timeout: Duration::from_secs(3),
-                default_model: Pm1Model::default(),
-                memory_rate: 0.75,
-                count: 80,
-                measure_weight: 8.0,
-                beacon_on_robot: Point {
-                    coords: vector(-0.2, 0.0),
-                },
-                max_inconsistency: 0.2,
-            },
-            move |model, weight, size| {
-                let k = (1.0 - weight) * 0.025;
-                (0..size)
-                    .map(|_| {
-                        Pm1Model::new(
-                            model.width,
-                            model.length,
-                            model.wheel * (1.0 + standard_gaussian.next() * k),
-                        )
-                    })
-                    .collect()
-            },
-        )));
+        let filter = particle_filter!();
         let time_origin = Instant::now();
         {
             let filter = filter.clone();
@@ -209,31 +186,19 @@ impl Robot {
                             }
                         }
                         WheelsUpdated(t, wheels) => {
-                            let mut filter = filter.lock().await;
-                            filter.update(t - time_origin, wheels);
-                            let pose = filter.get();
-                            let wheel =
-                                filter
-                                    .particles()
-                                    .iter()
-                                    .fold((0.0, 0.0), |(wheel, weight), p| {
-                                        (wheel + p.model.wheel * p.weight, weight + p.weight)
-                                    });
-                            let wheel = wheel.0 / wheel.1;
-                            if wheel.is_normal() {
-                                filter.parameters.default_model.wheel = wheel;
-                            }
-                            let odom = filter
-                                .parameters
-                                .default_model
-                                .wheels_to_velocity(wheels)
-                                .to_odometry();
-
+                            let (pose, model) = {
+                                let mut filter = filter.lock().await;
+                                filter.update(t - time_origin, wheels);
+                                update_wheel!(filter);
+                                (filter.get(), filter.parameters.default_model.clone())
+                            };
+                            let odom = model.wheels_to_velocity(wheels).to_odometry();
                             s += odom.s;
                             a += odom.a;
                             join!(
                                 send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event),
                                 send_async!(Event::PoseUpdated(pose.into()) => robot.event),
+                                robot.chassis.update_model(model),
                                 robot.automatic(pose),
                             );
                         }
@@ -451,7 +416,7 @@ mod macros {
                 futures::join! {
                     $( $tokens )*
                 }
-            });
+            })
         };
     }
 
