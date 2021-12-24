@@ -14,17 +14,17 @@ pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
 steering = { path = "../steering", optional = true, features = ["xbox360"] }
 
-async-std = { version = "*", features = ["attributes", "unstable"] }
+async-std = { version = "*", features = ["unstable"] }
 futures = { version = "*", default-features = false, features = [
     "async-await", # 只要个 join!
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
 lazy_static = "*"
 
-monitor-tool = { path = "../monitor-tool-rs", optional = true }
+monitor-tool = { path = "../monitor-tool-rs", optional = true, default-features = false }
 
 [features]
 default = ["runtime", "wired-joystick", "display"]
 runtime = []
 wired-joystick = ["steering"]
-display = ["monitor-tool"]
+display = ["monitor-tool/sender"]
