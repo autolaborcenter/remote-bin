@@ -33,9 +33,6 @@ mod joystick;
 #[cfg(feature = "display")]
 mod display;
 
-#[cfg(feature = "display")]
-use display::Painter;
-
 use chassis::Chassis;
 use lidar::Lidar;
 
@@ -213,13 +210,12 @@ impl Robot {
                             let mut filter = filter.lock().await;
                             filter.update(t - time_origin, wheels);
                             update_wheel!(filter);
-                            let pose = filter.get();
-                            let model = filter.parameters.default_model.clone();
-                            #[cfg(feature = "display")]
-                            robot
-                                .painter
-                                .paint(|encoder| {
-                                    {
+                            if let Some(pose) = filter.get() {
+                                let model = filter.parameters.default_model.clone();
+                                #[cfg(feature = "display")]
+                                robot
+                                    .painter
+                                    .paint(|encoder| {
                                         let Isometry2 {
                                             translation: Translation { vector },
                                             rotation,
@@ -227,29 +223,29 @@ impl Robot {
                                         encoder.topic(display::POSE).push(
                                             vertex!(0; vector[0], vector[1] => rotation.angle(); 0),
                                         );
-                                    }
-                                    encoder.with_topic(display::PARTICLES, |mut topic| {
-                                        topic.clear();
-                                        topic.extend(filter.particles().iter().map(|p| {
+                                        encoder.with_topic(display::PARTICLES, |mut topic| {
+                                            topic.clear();
+                                            topic.extend(filter.particles().iter().map(|p| {
                                             let Isometry2 {
                                                 translation: Translation { vector },
                                                 rotation,
                                             } = p.pose;
                                             vertex!(0; vector[0], vector[1] => rotation.angle(); 0)
                                         }));
-                                    });
-                                })
-                                .await;
-                            std::mem::drop(filter);
-                            let odom = model.wheels_to_velocity(wheels).to_odometry();
-                            s += odom.s;
-                            a += odom.a;
-                            join!(
-                                send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event),
-                                send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                robot.chassis.update_model(model),
-                                robot.automatic(pose),
-                            );
+                                        });
+                                    })
+                                    .await;
+                                std::mem::drop(filter);
+                                let odom = model.wheels_to_velocity(wheels).to_odometry();
+                                s += odom.s;
+                                a += odom.a;
+                                join!(
+                                    send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event),
+                                    send_async!(Event::PoseUpdated(pose.into()) => robot.event),
+                                    robot.chassis.update_model(model),
+                                    robot.automatic(pose),
+                                );
+                            }
                         }
                     }
                 }
