@@ -6,7 +6,11 @@ use async_std::{
     task,
 };
 use futures::join;
-use parry2d::na::{Isometry2, Point, Point2, Vector2};
+use monitor_tool::vertex;
+use parry2d::{
+    math::Translation,
+    na::{Isometry2, Point, Point2, Vector2},
+};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
 use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
@@ -140,6 +144,15 @@ impl Robot {
                                 }
                             }
                             Solution::Data { state, enu, dir: _ } => {
+                                #[cfg(feature = "display")]
+                                robot
+                                    .painter
+                                    .paint(|encoder| {
+                                        encoder
+                                            .topic(display::GPS)
+                                            .push(vertex!(0; enu.e,enu.n; 0));
+                                    })
+                                    .await;
                                 if state.state_pos > 40 {
                                     filter.lock().await.measure(
                                         t - time_origin,
@@ -197,12 +210,37 @@ impl Robot {
                             }
                         }
                         WheelsUpdated(t, wheels) => {
-                            let (pose, model) = {
-                                let mut filter = filter.lock().await;
-                                filter.update(t - time_origin, wheels);
-                                update_wheel!(filter);
-                                (filter.get(), filter.parameters.default_model.clone())
-                            };
+                            let mut filter = filter.lock().await;
+                            filter.update(t - time_origin, wheels);
+                            update_wheel!(filter);
+                            let pose = filter.get();
+                            let model = filter.parameters.default_model.clone();
+                            #[cfg(feature = "display")]
+                            robot
+                                .painter
+                                .paint(|encoder| {
+                                    {
+                                        let Isometry2 {
+                                            translation: Translation { vector },
+                                            rotation,
+                                        } = pose;
+                                        encoder.topic(display::POSE).push(
+                                            vertex!(0; vector[0], vector[1] => rotation.angle(); 0),
+                                        );
+                                    }
+                                    encoder.with_topic(display::PARTICLES, |mut topic| {
+                                        topic.clear();
+                                        topic.extend(filter.particles().iter().map(|p| {
+                                            let Isometry2 {
+                                                translation: Translation { vector },
+                                                rotation,
+                                            } = p.pose;
+                                            vertex!(0; vector[0], vector[1] => rotation.angle(); 0)
+                                        }));
+                                    });
+                                })
+                                .await;
+                            std::mem::drop(filter);
                             let odom = model.wheels_to_velocity(wheels).to_odometry();
                             s += odom.s;
                             a += odom.a;

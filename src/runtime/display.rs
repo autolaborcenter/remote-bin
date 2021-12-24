@@ -6,16 +6,17 @@
 use monitor_tool::{palette, rgba, Encoder};
 use std::time::Duration;
 
-const FOCUS: &str = "focus";
-const POSE: &str = "pose";
-const GPS: &str = "gps";
-const PARTICLES: &str = "particles";
-const POSE_GROUP: [&str; 3] = [POSE, GPS, PARTICLES];
+pub(super) const FOCUS: &str = "focus";
+pub(super) const POSE: &str = "pose";
+pub(super) const GPS: &str = "gps";
+pub(super) const PARTICLES: &str = "particles";
+pub(super) const POSE_GROUP: [&str; 3] = [POSE, GPS, PARTICLES];
 
 #[derive(Clone)]
 pub(super) struct Painter(Arc<UdpSocket>);
 
 impl Painter {
+    /// 构造绘图接口
     #[inline]
     pub async fn new() -> Self {
         let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
@@ -23,6 +24,13 @@ impl Painter {
         Self(socket)
     }
 
+    /// 绘图
+    #[inline]
+    pub async fn paint(&self, f: impl FnOnce(&mut Encoder) -> ()) {
+        let _ = self.0.send(&Encoder::with(f)).await;
+    }
+
+    /// 配置目标地址
     pub async fn connect<A: ToSocketAddrs>(&self, a: A) {
         let _ = self.0.connect(a).await;
         let clear = Encoder::with(|encoder| {
