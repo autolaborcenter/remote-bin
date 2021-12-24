@@ -26,6 +26,12 @@ mod rtk;
 #[cfg(feature = "wired-joystick")]
 mod joystick;
 
+#[cfg(feature = "display")]
+mod display;
+
+#[cfg(feature = "display")]
+use display::Painter;
+
 use chassis::Chassis;
 use lidar::Lidar;
 
@@ -44,6 +50,9 @@ pub struct Robot {
     joystick_deadline: Arc<Mutex<Instant>>,
     tracking_speed: Arc<AtomicU32>,
     task: Arc<Mutex<Task>>,
+
+    #[cfg(feature = "display")]
+    painter: display::Painter,
 }
 
 pub enum Event {
@@ -98,6 +107,8 @@ impl Robot {
             artificial_deadline: Arc::new(Mutex::new(now)),
             tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
             task: Arc::new(Mutex::new(Task::Idle)),
+            #[cfg(feature = "display")]
+            painter: display::Painter::new().await,
         };
 
         let filter = particle_filter!();
@@ -245,10 +256,18 @@ impl Robot {
         (robot.clone(), to_extern)
     }
 
+    #[cfg(feature = "display")]
+    #[inline]
+    pub async fn panit_to<A: async_std::net::ToSocketAddrs>(&self, a: A) {
+        self.painter.connect(a).await;
+    }
+
+    #[inline]
     pub fn set_tracking_speed(&self, val: f32) {
         self.tracking_speed.store(val.to_bits(), Relaxed);
     }
 
+    #[inline]
     pub async fn read_path(&self) -> Option<Vec<Isometry2<f32>>> {
         PathFile::open(self.context_dir.as_path())
             .await
@@ -256,6 +275,7 @@ impl Robot {
             .map(|f| f.collect())
     }
 
+    #[inline]
     pub async fn record(&self) {
         *self.task.lock().await = Task::WaitingPose;
     }
@@ -281,10 +301,12 @@ impl Robot {
         Ok(())
     }
 
+    #[inline]
     pub async fn stop(&self) {
         *self.task.lock().await = Task::Idle;
     }
 
+    #[inline]
     pub async fn predict(&self) -> Option<Trajectory> {
         self.chassis.predict().await
     }

@@ -21,7 +21,10 @@ futures = { version = "*", default-features = false, features = [
 parry2d = { version = "*", features = ["simd-stable"] }
 lazy_static = "*"
 
+monitor-tool = { path = "../monitor-tool-rs", optional = true }
+
 [features]
-default = ["runtime", "wired-joystick"]
+default = ["runtime", "wired-joystick", "display"]
 runtime = []
 wired-joystick = ["steering"]
+display = ["monitor-tool"]
