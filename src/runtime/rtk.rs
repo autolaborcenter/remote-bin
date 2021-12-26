@@ -9,43 +9,85 @@ use async_std::{
 };
 use lazy_static::lazy_static;
 use pm1_sdk::driver::{SupervisorEventForSingle::*, SupervisorForSingle};
-use rtk_ins570::{Solution, RTK};
 use rtk_qxwz::{
-    encode_base64, nmea::NmeaLine, GpggaSender, QXWZAccount, QXWZService, RTCMReceiver, RTKBoard,
+    encode_base64, nmea::gpgga, nmea::NmeaLine, GpggaSender, QXWZAccount, QXWZService,
+    RTCMReceiver, RTKBoard,
 };
 use std::time::{Duration, Instant};
 
 pub(super) enum Event {
     Connected,
     Disconnected,
-    SolutionUpdated(Instant, Solution),
+    GPGGA(Instant, gpgga::Body),
 }
 
 pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
     *task::block_on(FILE_PATH.lock()) = dir;
-    spawn_qxwz();
-    let (sender, receiver) = unbounded();
-    task::spawn_blocking(move || {
-        SupervisorForSingle::<RTK>::default().join(|e| {
-            task::block_on(async {
-                match e {
-                    Connected(_, _) => {
-                        send_async!(Event::Connected => sender).await;
-                    }
-                    ConnectFailed => {
-                        task::sleep(Duration::from_secs(1)).await;
-                    }
-                    Disconnected => {
-                        send_async!(Event::Disconnected => sender).await;
-                    }
-                    Event(_, Some((time, solution))) => {
-                        send_async!(Event::SolutionUpdated(time, solution) => sender).await;
-                    }
-                    Event(_, None) => {}
-                };
-            });
-            true
+    let gpgga: Arc<Mutex<Option<GpggaSender>>> = Arc::new(Mutex::new(None));
+    let rtcm: Arc<Mutex<Option<RTCMReceiver>>> = Arc::new(Mutex::new(None));
+    {
+        let gpgga = gpgga.clone();
+        let rtcm = rtcm.clone();
+
+        task::spawn_blocking(move || {
+            let mut account = String::new();
+            loop {
+                let time = Instant::now();
+                SupervisorForSingle::<QXWZService<AuthFile>>::default().join(|e| {
+                    task::block_on(async {
+                        match e {
+                            Connected(key, stream) => {
+                                println!("CONNECTED    qxwz tcp");
+                                *gpgga.lock().await = Some(stream.get_sender());
+                                account = key;
+                            }
+                            Disconnected => {
+                                eprintln!("DISCONNECTED qxwz tcp");
+                                *gpgga.lock().await = None;
+                            }
+                            Event(_, Some((_, buf))) => {
+                                if let Some(ref mut receiver) = *rtcm.lock().await {
+                                    receiver.receive(buf.as_slice());
+                                }
+                            }
+                            Event(_, None) => {}
+                            ConnectFailed => {
+                                task::sleep(Duration::from_secs(3)).await;
+                            }
+                        }
+                        *UPDATE_TIME.lock().await < time
+                    })
+                });
+            }
         });
+    }
+    let (sender, receiver) = unbounded();
+    SupervisorForSingle::<RTKBoard>::default().join(|e| {
+        task::block_on(async {
+            match e {
+                Connected(_, board) => {
+                    println!("CONNECTED    qxwz serial");
+                    send_async!(Event::Connected => sender).await;
+                    *rtcm.lock().await = Some(board.get_receiver());
+                }
+                Disconnected => {
+                    eprintln!("DISCONNECTED qxwz serial");
+                    send_async!(Event::Disconnected => sender).await;
+                    *rtcm.lock().await = None;
+                }
+                Event(_, Some((t, (NmeaLine::GPGGA(body, tail), cs)))) => {
+                    send_async!(Event::GPGGA(t, body) => sender).await;
+                    if let Some(ref mut s) = *gpgga.lock().await {
+                        s.send(tail.as_str(), cs).await;
+                    }
+                }
+                Event(_, _) => {}
+                ConnectFailed => {
+                    task::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        });
+        true
     });
     receiver
 }
@@ -78,71 +120,4 @@ impl QXWZAccount for AuthFile {
             }
         })
     }
-}
-
-fn spawn_qxwz() {
-    let sender: Arc<Mutex<Option<GpggaSender>>> = Arc::new(Mutex::new(None));
-    let receiver: Arc<Mutex<Option<RTCMReceiver>>> = Arc::new(Mutex::new(None));
-    {
-        let sender = sender.clone();
-        let receiver = receiver.clone();
-
-        task::spawn_blocking(move || {
-            let mut account = String::new();
-            loop {
-                let time = Instant::now();
-                SupervisorForSingle::<QXWZService<AuthFile>>::default().join(|e| {
-                    task::block_on(async {
-                        match e {
-                            Connected(key, stream) => {
-                                println!("CONNECTED    qxwz tcp");
-                                *sender.lock().await = Some(stream.get_sender());
-                                account = key;
-                            }
-                            Disconnected => {
-                                eprintln!("DISCONNECTED qxwz tcp");
-                                *sender.lock().await = None;
-                            }
-                            Event(_, Some((_, buf))) => {
-                                if let Some(ref mut receiver) = *receiver.lock().await {
-                                    receiver.receive(buf.as_slice());
-                                }
-                            }
-                            Event(_, None) => {}
-                            ConnectFailed => {
-                                task::sleep(Duration::from_secs(3)).await;
-                            }
-                        }
-                        *UPDATE_TIME.lock().await < time
-                    })
-                });
-            }
-        });
-    }
-    task::spawn_blocking(move || {
-        SupervisorForSingle::<RTKBoard>::default().join(|e| {
-            task::block_on(async {
-                match e {
-                    Connected(_, board) => {
-                        println!("CONNECTED    qxwz serial");
-                        *receiver.lock().await = Some(board.get_receiver());
-                    }
-                    Disconnected => {
-                        eprintln!("DISCONNECTED qxwz serial");
-                        *receiver.lock().await = None;
-                    }
-                    Event(_, Some((_, (NmeaLine::GPGGA(_, tail), cs)))) => {
-                        if let Some(ref mut s) = *sender.lock().await {
-                            s.send(tail.as_str(), cs).await;
-                        }
-                    }
-                    Event(_, _) => {}
-                    ConnectFailed => {
-                        task::sleep(Duration::from_secs(1)).await;
-                    }
-                }
-            });
-            true
-        });
-    });
 }

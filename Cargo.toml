@@ -8,8 +8,8 @@ readme = "README.md"
 [dependencies]
 pm1-sdk = { path = "../pm1-sdk-3" }
 lidar-ld19 = { path = "../lidar-ld19" }
-rtk-ins570 = { path = "../rtk-ins570" }
 rtk-qxwz = { path = "../rtk-qxwz" }
+gnss = { path = "../gnss" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
 steering = { path = "../steering", features = ["xbox360"] }
