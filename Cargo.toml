@@ -12,7 +12,7 @@ rtk-ins570 = { path = "../rtk-ins570" }
 rtk-qxwz = { path = "../rtk-qxwz" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
-steering = { path = "../steering", optional = true, features = ["xbox360"] }
+steering = { path = "../steering", features = ["xbox360"] }
 
 async-std = { version = "*", features = ["unstable"] }
 futures = { version = "*", default-features = false, features = [
@@ -24,7 +24,6 @@ lazy_static = "*"
 monitor-tool = { path = "../monitor-tool-rs", optional = true, default-features = false }
 
 [features]
-default = ["runtime", "wired-joystick", "display"]
+default = ["runtime", "display"]
 runtime = []
-wired-joystick = ["steering"]
 display = ["monitor-tool/sender"]

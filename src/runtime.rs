@@ -24,16 +24,16 @@ use std::{
 mod chassis;
 #[macro_use]
 mod filter;
+mod drive_blocking;
+mod joystick;
 mod lidar;
 mod rtk;
-
-#[cfg(feature = "wired-joystick")]
-mod joystick;
 
 #[cfg(feature = "display")]
 mod display;
 
 use chassis::Chassis;
+use drive_blocking::DriveBlocking;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
@@ -47,8 +47,7 @@ pub struct Robot {
     lidar: Lidar,
     event: Sender<Event>,
 
-    artificial_deadline: Arc<Mutex<Instant>>,
-    joystick_deadline: Arc<Mutex<Instant>>,
+    drive_blocking: DriveBlocking,
     tracking_speed: Arc<AtomicU32>,
     task: Arc<Mutex<Task>>,
 
@@ -79,14 +78,11 @@ enum Task {
     Track(Path, TrackContext),
 }
 
-#[cfg(feature = "wired-joystick")]
-const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); // 手柄控制保护期
-
-const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
-const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
+const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
 
 impl Robot {
     pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
+        let device_code = Arc::new(Mutex::new(DeviceCode::default()));
         let rtk = if rtk {
             rtk::supervisor(context_dir.clone())
         } else {
@@ -95,17 +91,15 @@ impl Robot {
         let (chassis, from_chassis) = Chassis::supervisor();
         let (lidar, from_lidar) = Lidar::supervisor();
         let (event, to_extern) = unbounded();
-        let device_code = Arc::new(Mutex::new(DeviceCode::default()));
 
-        let now = Instant::now();
         context_dir.push("path");
         let robot = Self {
             context_dir,
             chassis,
             lidar,
             event,
-            joystick_deadline: Arc::new(Mutex::new(now)),
-            artificial_deadline: Arc::new(Mutex::new(now)),
+
+            drive_blocking: DriveBlocking::new(),
             tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
             task: Arc::new(Mutex::new(Task::Idle)),
             #[cfg(feature = "display")]
@@ -266,22 +260,25 @@ impl Robot {
                 }
             });
         }
-        #[cfg(feature = "wired-joystick")]
         {
             let robot = robot.clone();
-            task::spawn_blocking(move || {
+            task::spawn(async move {
                 let mut joystick = joystick::Joystick::new();
                 loop {
-                    let target = joystick.get();
+                    let (back, target) = task::spawn_blocking(move || {
+                        let target = joystick.get();
+                        (joystick, target)
+                    })
+                    .await;
+                    joystick = back;
                     if !target.is_released() {
-                        task::block_on(async {
-                            let deadline = Instant::now() + JOYSTICK_TIMEOUT;
-                            *robot.joystick_deadline.lock().await = deadline;
-                        });
-                        task::block_on(robot.drive_and_warn(target, 0.0));
-                        std::thread::sleep(Duration::from_millis(50));
+                        join!(
+                            robot.drive_blocking.drive_joystick(),
+                            robot.drive_and_warn(target, 0.0),
+                            task::sleep(Duration::from_millis(50)),
+                        );
                     } else {
-                        std::thread::sleep(Duration::from_millis(400));
+                        task::sleep(Duration::from_millis(400)).await;
                     }
                 }
             });
@@ -346,18 +343,9 @@ impl Robot {
     }
 
     pub async fn drive(&self, target: Physical) {
-        #[cfg(not(feature = "wired-joystick"))]
-        if *self.joystick_deadline.lock().await >= Instant::now() {
-            return;
+        if self.drive_blocking.try_drive_artificial().await {
+            self.check_and_drive(target).await;
         }
-
-        join!(
-            async {
-                let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
-                *self.artificial_deadline.lock().await = deadline;
-            },
-            self.check_and_drive(target)
-        );
     }
 
     async fn automatic(&self, pose: Isometry2<f32>) {
@@ -380,26 +368,21 @@ impl Robot {
                 }
             }
             Task::Track(path, context) => {
-                #[cfg(not(feature = "wired-joystick"))]
-                if *self.joystick_deadline.lock().await >= Instant::now() {
-                    return;
+                if self.drive_blocking.try_drive_automatic().await {
+                    let clone = context.clone();
+                    let mut tracker = Tracker {
+                        path: &path,
+                        context: clone,
+                    };
+                    if let Ok((k, rudder)) = tracker.track(pose) {
+                        self.check_and_drive(Physical {
+                            speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * k,
+                            rudder,
+                        })
+                        .await;
+                    }
+                    *context = tracker.context;
                 }
-                if *self.artificial_deadline.lock().await >= Instant::now() {
-                    return;
-                }
-                let clone = context.clone();
-                let mut tracker = Tracker {
-                    path: &path,
-                    context: clone,
-                };
-                if let Ok((k, rudder)) = tracker.track(pose) {
-                    self.check_and_drive(Physical {
-                        speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * k,
-                        rudder,
-                    })
-                    .await;
-                }
-                *context = tracker.context;
             }
         }
     }
