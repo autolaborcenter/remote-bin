@@ -1,4 +1,4 @@
-﻿use crate::{DeviceCode, Odometry, Physical, Pose};
+﻿use crate::{DeviceCode, LocalReference, Odometry, Physical, Pose, WGS84};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     path::PathBuf,
@@ -6,12 +6,7 @@ use async_std::{
     task,
 };
 use futures::join;
-use gnss::{LocalReference, WGS84};
-use monitor_tool::vertex;
-use parry2d::{
-    math::Translation,
-    na::{Isometry2, Point, Point2, Vector2},
-};
+use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
 use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
@@ -32,6 +27,9 @@ mod rtk;
 
 #[cfg(feature = "display")]
 mod display;
+
+#[cfg(feature = "display")]
+use monitor_tool::vertex;
 
 use chassis::Chassis;
 use drive_blocking::DriveBlocking;
@@ -147,7 +145,7 @@ impl Robot {
                                 altitude: float!(body.altitude),
                             });
                             #[cfg(feature = "display")]
-                            if let Some(level) = color_level(body.status) {
+                            if let Some(level) = display::color_level(body.status) {
                                 robot
                                     .painter
                                     .paint(|encoder| {
@@ -224,7 +222,7 @@ impl Robot {
                                     .painter
                                     .paint(|encoder| {
                                         let Isometry2 {
-                                            translation: Translation { vector },
+                                            translation: parry2d::na::Translation { vector },
                                             rotation,
                                         } = pose;
                                         encoder.topic(display::POSE).push(
@@ -234,7 +232,7 @@ impl Robot {
                                             topic.clear();
                                             topic.extend(filter.particles().iter().map(|p| {
                                             let Isometry2 {
-                                                translation: Translation { vector },
+                                                translation: parry2d::na::Translation { vector },
                                                 rotation,
                                             } = p.pose;
                                             vertex!(0; vector[0], vector[1] => rotation.angle(); 0)
@@ -482,18 +480,5 @@ pub(crate) const fn vector(x: f32, y: f32) -> Vector2<f32> {
 pub(crate) const fn point(x: f32, y: f32) -> Point2<f32> {
     Point {
         coords: vector(x, y),
-    }
-}
-
-#[inline]
-fn color_level(status: gpgga::Status) -> Option<u8> {
-    use gpgga::Status::*;
-    match status {
-        初始化 | 人工固定值 | 航位推算模式 | WAAS差分 | 码差分 | 正在估算 => {
-            None
-        }
-        单点定位 => Some(0),
-        浮点解 => Some(1),
-        固定解 => Some(2),
     }
 }

@@ -4,6 +4,7 @@
     task,
 };
 use monitor_tool::{palette, rgba, Encoder};
+use rtk_qxwz::nmea::gpgga;
 use std::time::Duration;
 
 pub(super) const FOCUS: &str = "focus";
@@ -32,13 +33,14 @@ impl Painter {
 
     /// 配置目标地址
     pub async fn connect<A: ToSocketAddrs>(&self, a: A) {
-        let _ = self.0.connect(a).await;
-        let clear = Encoder::with(|encoder| {
-            for topic in POSE_GROUP {
-                encoder.topic(topic).clear();
-            }
-        });
-        let _ = self.0.send(clear.as_slice()).await;
+        if let Ok(()) = self.0.connect(a).await {
+            let clear = Encoder::with(|encoder| {
+                for topic in POSE_GROUP {
+                    encoder.topic(topic).clear();
+                }
+            });
+            let _ = self.0.send(clear.as_slice()).await;
+        }
     }
 }
 
@@ -70,4 +72,17 @@ fn send_config(socket: Arc<UdpSocket>, period: Duration) {
             task::sleep(period).await;
         }
     });
+}
+
+#[inline]
+pub(super) fn color_level(status: gpgga::Status) -> Option<u8> {
+    use gpgga::Status::*;
+    match status {
+        初始化 | 人工固定值 | 航位推算模式 | WAAS差分 | 码差分 | 正在估算 => {
+            None
+        }
+        单点定位 => Some(0),
+        浮点解 => Some(1),
+        固定解 => Some(2),
+    }
 }
