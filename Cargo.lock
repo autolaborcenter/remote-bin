@@ -732,10 +732,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nmea"
-version = "0.1.2"
-
-[[package]]
 name = "num-complex"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1068,8 +1064,6 @@ dependencies = [
  "async-std",
  "base64",
  "driver",
- "gnss",
- "nmea",
  "serial-port",
 ]
 

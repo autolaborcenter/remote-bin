@@ -10,15 +10,15 @@ use async_std::{
 use lazy_static::lazy_static;
 use pm1_sdk::driver::{SupervisorEventForSingle::*, SupervisorForSingle};
 use rtk_qxwz::{
-    encode_base64, nmea::gpgga, nmea::NmeaLine, GpggaSender, QXWZAccount, QXWZService,
-    RTCMReceiver, RTKBoard,
+    encode_base64, Gpgga, GpggaParseError::*, GpggaSender, QXWZAccount, QXWZService, RTCMReceiver,
+    RTKBoard,
 };
 use std::time::{Duration, Instant};
 
 pub(super) enum Event {
     Connected,
     Disconnected,
-    GPGGA(Instant, gpgga::Body),
+    GPGGA(Instant, Gpgga),
 }
 
 pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
@@ -75,12 +75,20 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                     send_async!(Event::Disconnected => sender).await;
                     *rtcm.lock().await = None;
                 }
-                Event(_, Some((t, (NmeaLine::GPGGA(body, tail), cs)))) => {
-                    send_async!(Event::GPGGA(t, body) => sender).await;
-                    if let Some(ref mut s) = *gpgga.lock().await {
-                        s.send(tail.as_str(), cs).await;
+                Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
+                    Ok(body) => {
+                        send_async!(Event::GPGGA(t, body) => sender).await;
+                        if let Some(ref mut s) = *gpgga.lock().await {
+                            s.send(&line).await;
+                        }
                     }
-                }
+                    Err(WrongHead) => {
+                        if let Some(ref mut s) = *gpgga.lock().await {
+                            s.send(&line).await;
+                        }
+                    }
+                    Err(_) => {}
+                },
                 Event(_, _) => {}
                 ConnectFailed => {
                     task::sleep(Duration::from_secs(1)).await;

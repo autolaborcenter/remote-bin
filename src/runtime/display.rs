@@ -4,7 +4,7 @@
     task,
 };
 use monitor_tool::{palette, rgba, Encoder};
-use rtk_qxwz::nmea::gpgga;
+use rtk_qxwz::GpggaStatus;
 use std::time::Duration;
 
 pub(super) const FOCUS: &str = "focus";
@@ -75,14 +75,13 @@ fn send_config(socket: Arc<UdpSocket>, period: Duration) {
 }
 
 #[inline]
-pub(super) fn color_level(status: gpgga::Status) -> Option<u8> {
-    use gpgga::Status::*;
+pub(super) fn color_level(status: GpggaStatus) -> Option<u8> {
+    use GpggaStatus::*;
     match status {
-        初始化 | 人工固定值 | 航位推算模式 | WAAS差分 | 码差分 | 正在估算 => {
-            None
-        }
-        单点定位 => Some(0),
-        浮点解 => Some(1),
-        固定解 => Some(2),
+        无效解 | 用户输入 | 航位推算 | PPS | PPP => None,
+        单点解 => Some(0),
+        伪距差分 => Some(1),
+        浮点解 => Some(2),
+        固定解 => Some(3),
     }
 }

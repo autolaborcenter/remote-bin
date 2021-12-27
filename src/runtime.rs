@@ -10,7 +10,6 @@ use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
 use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
-use rtk_qxwz::nmea::gpgga;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
@@ -137,15 +136,14 @@ impl Robot {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        GPGGA(t, body) => {
-                            use gpgga::Status::*;
+                        GPGGA(t, gpgga) => {
                             let enu = local_ref.wgs84_to_enu(WGS84 {
-                                latitude: float!(body.latitude),
-                                longitude: float!(body.longitude),
-                                altitude: float!(body.altitude),
+                                latitude: float!(gpgga.latitude),
+                                longitude: float!(gpgga.longitude),
+                                altitude: float!(gpgga.altitude),
                             });
                             #[cfg(feature = "display")]
-                            if let Some(level) = display::color_level(body.status) {
+                            if let Some(level) = display::color_level(gpgga.status) {
                                 robot
                                     .painter
                                     .paint(|encoder| {
@@ -155,7 +153,8 @@ impl Robot {
                                     })
                                     .await;
                             }
-                            match body.status {
+                            use rtk_qxwz::GpggaStatus::*;
+                            match gpgga.status {
                                 浮点解 | 固定解 => {
                                     filter.lock().await.measure(
                                         t - time_origin,
