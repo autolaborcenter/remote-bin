@@ -267,24 +267,21 @@ impl Robot {
         }
         {
             let robot = robot.clone();
-            task::spawn(async move {
+            task::spawn_blocking(move || {
                 let mut joystick = joystick::Joystick::new();
                 loop {
-                    let (back, target) = task::spawn_blocking(move || {
-                        let target = joystick.get();
-                        (joystick, target)
-                    })
-                    .await;
-                    joystick = back;
-                    if !target.is_released() {
-                        join!(
-                            robot.drive_blocking.drive_joystick(),
-                            robot.drive_and_warn(target, 0.0),
-                            task::sleep(Duration::from_millis(50)),
-                        );
-                    } else {
-                        task::sleep(Duration::from_millis(400)).await;
-                    }
+                    let target = joystick.get();
+                    task::block_on(async {
+                        if !target.is_released() {
+                            join!(
+                                robot.drive_blocking.drive_joystick(),
+                                robot.drive_and_warn(target, 0.0),
+                                task::sleep(Duration::from_millis(50)),
+                            );
+                        } else {
+                            task::sleep(Duration::from_millis(400)).await;
+                        }
+                    });
                 }
             });
         }
