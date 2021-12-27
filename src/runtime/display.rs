@@ -56,10 +56,9 @@ fn send_config(socket: Arc<UdpSocket>, period: Duration) {
                 u32::MAX,
                 0,
                 &[
-                    (0, rgba!(VIOLET; 0.2)),
-                    (1, rgba!(VIOLET; 0.2)),
-                    (2, rgba!(VIOLET; 0.2)),
-                    (3, rgba!(VIOLET; 0.2)),
+                    (0, rgba!(RED; 0.25)),
+                    (1, rgba!(YELLOW; 0.5)),
+                    (2, rgba!(GREEN; 0.5)),
                 ],
                 |_| {},
             );

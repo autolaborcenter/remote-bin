@@ -15,6 +15,7 @@ use parry2d::{
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
 use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
+use rtk_qxwz::nmea::gpgga;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
@@ -85,6 +86,12 @@ pub const LOCAL_ORIGIN: WGS84 = WGS84 {
     altitude: 0.0,
 };
 
+macro_rules! float {
+    ($pair:expr) => {
+        $pair.0 as f64 * 0.1f64.powi($pair.1 as i32)
+    };
+}
+
 impl Robot {
     pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
         let device_code = Arc::new(Mutex::new(DeviceCode::default()));
@@ -133,22 +140,23 @@ impl Robot {
                             }
                         }
                         GPGGA(t, body) => {
-                            use rtk_qxwz::nmea::gpgga::Status::*;
+                            use gpgga::Status::*;
                             let enu = local_ref.wgs84_to_enu(WGS84 {
-                                latitude: body.latitude.0 as f64
-                                    * 0.1f64.powi(body.latitude.1 as i32),
-                                longitude: body.longitude.0 as f64
-                                    * 0.1f64.powi(body.longitude.1 as i32),
-                                altitude: body.altitude.0 as f64
-                                    * 0.1f64.powi(body.altitude.1 as i32),
+                                latitude: float!(body.latitude),
+                                longitude: float!(body.longitude),
+                                altitude: float!(body.altitude),
                             });
                             #[cfg(feature = "display")]
-                            robot
-                                .painter
-                                .paint(|encoder| {
-                                    encoder.topic(display::GPS).push(vertex!(0; enu.e,enu.n; 0));
-                                })
-                                .await;
+                            if let Some(level) = color_level(body.status) {
+                                robot
+                                    .painter
+                                    .paint(|encoder| {
+                                        encoder
+                                            .topic(display::GPS)
+                                            .push(vertex!(level; enu.e,enu.n; 0));
+                                    })
+                                    .await;
+                            }
                             match body.status {
                                 浮点解 | 固定解 => {
                                     filter.lock().await.measure(
@@ -474,5 +482,18 @@ pub(crate) const fn vector(x: f32, y: f32) -> Vector2<f32> {
 pub(crate) const fn point(x: f32, y: f32) -> Point2<f32> {
     Point {
         coords: vector(x, y),
+    }
+}
+
+#[inline]
+fn color_level(status: gpgga::Status) -> Option<u8> {
+    use gpgga::Status::*;
+    match status {
+        初始化 | 人工固定值 | 航位推算模式 | WAAS差分 | 码差分 | 正在估算 => {
+            None
+        }
+        单点定位 => Some(0),
+        浮点解 => Some(1),
+        固定解 => Some(2),
     }
 }
