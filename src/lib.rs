@@ -7,6 +7,12 @@ mod runtime;
 #[cfg(feature = "runtime")]
 pub use runtime::*;
 
+pub const LOCAL_ORIGIN: WGS84 = WGS84 {
+    latitude: 0.0,
+    longitude: 0.0,
+    altitude: 0.0,
+};
+
 pub use device_code::DeviceCode;
 pub use gnss::{Enu, LocalReference, WGS84};
 pub use lidar_ld19::{unzip, Point, CONFIG};

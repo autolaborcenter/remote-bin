@@ -77,11 +77,6 @@ enum Task {
 }
 
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
-pub const LOCAL_ORIGIN: WGS84 = WGS84 {
-    latitude: 0.0,
-    longitude: 0.0,
-    altitude: 0.0,
-};
 
 macro_rules! float {
     ($pair:expr) => {
@@ -122,7 +117,7 @@ impl Robot {
             let robot = robot.clone();
             let device_code = device_code.clone();
             task::spawn(async move {
-                let local_ref = LocalReference::from(LOCAL_ORIGIN);
+                let local_ref = LocalReference::from(super::LOCAL_ORIGIN);
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
                     match e {

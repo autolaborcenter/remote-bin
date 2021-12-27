@@ -12,7 +12,7 @@ rtk-qxwz = { path = "../rtk-qxwz" }
 gnss = { path = "../gnss" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
-steering = { path = "../steering", features = ["xbox360"] }
+steering = { path = "../steering" }
 
 async-std = { version = "*", features = ["unstable"] }
 futures = { version = "*", default-features = false, features = [
@@ -25,5 +25,5 @@ monitor-tool = { path = "../monitor-tool-rs", optional = true, default-features 
 
 [features]
 default = ["runtime", "display"]
-runtime = []
+runtime = ["steering/xbox360"]
 display = ["monitor-tool/sender"]
