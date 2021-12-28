@@ -3,15 +3,19 @@
     sync::Arc,
     task,
 };
-use monitor_tool::{palette, rgba, Encoder};
+use gnss::Enu;
+use monitor_tool::{palette, rgba, vertex, Encoder, Shape, Vertex};
+use parry2d::na::Isometry2;
+use pm1_sdk::model::Pm1Model;
+use pose_filter::Particle;
 use rtk_qxwz::GpggaStatus;
 use std::time::Duration;
 
-pub(super) const FOCUS: &str = "focus";
-pub(super) const POSE: &str = "pose";
-pub(super) const GPS: &str = "gps";
-pub(super) const PARTICLES: &str = "particles";
-pub(super) const POSE_GROUP: [&str; 3] = [POSE, GPS, PARTICLES];
+const FOCUS: &str = "focus";
+const POSE: &str = "pose";
+const GPS: &str = "gps";
+const PARTICLES: &str = "particles";
+const POSE_GROUP: [&str; 3] = [POSE, GPS, PARTICLES];
 
 #[derive(Clone)]
 pub(super) struct Painter(Arc<UdpSocket>);
@@ -29,6 +33,46 @@ impl Painter {
     #[inline]
     pub async fn paint(&self, f: impl FnOnce(&mut Encoder) -> ()) {
         let _ = self.0.send(&Encoder::with(f)).await;
+    }
+
+    /// 绘制 gps 单点
+    pub async fn paint_gps(&self, status: GpggaStatus, enu: Enu) {
+        use GpggaStatus::*;
+        let level = match status {
+            无效解 | 用户输入 | 航位推算 | PPS | PPP => return,
+            单点解 => 0,
+            伪距差分 => 1,
+            浮点解 => 2,
+            固定解 => 3,
+        };
+        self.paint(|encoder| {
+            encoder.topic(GPS).push(vertex!(level; enu.e,enu.n; 0));
+        })
+        .await;
+    }
+
+    /// 绘制粒子滤波器粒子和输出
+    pub async fn paint_filter(&self, pose: Isometry2<f32>, particles: &[Particle<Pm1Model>]) {
+        self.paint(|encoder| {
+            let Isometry2 {
+                translation: parry2d::na::Translation { vector },
+                rotation,
+            } = pose;
+            encoder
+                .topic(POSE)
+                .push(vertex!(0; vector[0], vector[1] => rotation.angle(); 0));
+            encoder.with_topic(PARTICLES, |mut topic| {
+                topic.clear();
+                topic.extend(particles.iter().map(|p| {
+                    let Isometry2 {
+                        translation: parry2d::na::Translation { vector },
+                        rotation,
+                    } = p.pose;
+                    vertex!(0; vector[0], vector[1] => rotation.angle(); 0)
+                }));
+            });
+        })
+        .await;
     }
 
     /// 配置目标地址
@@ -72,16 +116,4 @@ fn send_config(socket: Arc<UdpSocket>, period: Duration) {
             task::sleep(period).await;
         }
     });
-}
-
-#[inline]
-pub(super) fn color_level(status: GpggaStatus) -> Option<u8> {
-    use GpggaStatus::*;
-    match status {
-        无效解 | 用户输入 | 航位推算 | PPS | PPP => None,
-        单点解 => Some(0),
-        伪距差分 => Some(1),
-        浮点解 => Some(2),
-        固定解 => Some(3),
-    }
 }

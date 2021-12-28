@@ -1,4 +1,6 @@
-﻿use crate::{DeviceCode, LocalReference, Odometry, Physical, Pose, WGS84};
+﻿use crate::{
+    device_code::AtomicDeviceCode, DeviceCode, LocalReference, Odometry, Physical, Pose, WGS84,
+};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     path::PathBuf,
@@ -28,7 +30,7 @@ mod rtk;
 mod display;
 
 #[cfg(feature = "display")]
-use monitor_tool::vertex;
+use display::*;
 
 use chassis::Chassis;
 use drive_blocking::DriveBlocking;
@@ -50,7 +52,7 @@ pub struct Robot {
     task: Arc<Mutex<Task>>,
 
     #[cfg(feature = "display")]
-    painter: display::Painter,
+    painter: Painter,
 }
 
 pub enum Event {
@@ -86,7 +88,7 @@ macro_rules! float {
 
 impl Robot {
     pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
-        let device_code = Arc::new(Mutex::new(DeviceCode::default()));
+        let device_code = AtomicDeviceCode::default();
         let rtk = if rtk {
             rtk::supervisor(context_dir.clone())
         } else {
@@ -107,7 +109,7 @@ impl Robot {
             tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
             task: Arc::new(Mutex::new(Task::Idle)),
             #[cfg(feature = "display")]
-            painter: display::Painter::new().await,
+            painter: Painter::new().await,
         };
 
         let filter = particle_filter!();
@@ -122,12 +124,12 @@ impl Robot {
                     use rtk::Event::*;
                     match e {
                         Connected => {
-                            if let Some(code) = device_code.lock().await.set(&[2]) {
+                            if let Some(code) = device_code.set(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(&[2, 4]) {
+                            if let Some(code) = device_code.clear(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
@@ -138,16 +140,7 @@ impl Robot {
                                 altitude: float!(gpgga.altitude),
                             });
                             #[cfg(feature = "display")]
-                            if let Some(level) = display::color_level(gpgga.status) {
-                                robot
-                                    .painter
-                                    .paint(|encoder| {
-                                        encoder
-                                            .topic(display::GPS)
-                                            .push(vertex!(level; enu.e,enu.n; 0));
-                                    })
-                                    .await;
-                            }
+                            robot.painter.paint_gps(gpgga.status, enu).await;
                             use rtk_qxwz::GpggaStatus::*;
                             match gpgga.status {
                                 浮点解 | 固定解 => {
@@ -155,17 +148,8 @@ impl Robot {
                                         t - time_origin,
                                         point(enu.e as f32, enu.n as f32),
                                     );
-                                    if let Some(code) = device_code.lock().await.set(&[3, 4]) {
-                                        send_async!(Event::ConnectionModified(code) => robot.event)
-                                            .await;
-                                    }
                                 }
-                                _ => {
-                                    if let Some(code) = device_code.lock().await.clear(&[4]) {
-                                        send_async!(Event::ConnectionModified(code) => robot.event)
-                                            .await;
-                                    }
-                                }
+                                _ => {}
                             }
                         }
                     }
@@ -182,24 +166,24 @@ impl Robot {
                     use chassis::Event::*;
                     match e {
                         Connected => {
-                            if let Some(code) = device_code.lock().await.set(&[0]) {
+                            if let Some(code) = device_code.set(&[0]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(&[0, 1]) {
+                            if let Some(code) = device_code.clear(&[0, 1]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         StatusUpdated(s) => {
                             send_async!(Event::ChassisStatusUpdated(s) => robot.event).await;
                             if s.power_switch {
-                                if let Some(code) = device_code.lock().await.set(&[1]) {
+                                if let Some(code) = device_code.set(&[1]) {
                                     send_async!(Event::ConnectionModified(code) => robot.event)
                                         .await;
                                 }
                             } else {
-                                if let Some(code) = device_code.lock().await.clear(&[1]) {
+                                if let Some(code) = device_code.clear(&[1]) {
                                     send_async!(Event::ConnectionModified(code) => robot.event)
                                         .await;
                                 }
@@ -212,28 +196,7 @@ impl Robot {
                             if let Some(pose) = filter.get() {
                                 let model = filter.parameters.default_model.clone();
                                 #[cfg(feature = "display")]
-                                robot
-                                    .painter
-                                    .paint(|encoder| {
-                                        let Isometry2 {
-                                            translation: parry2d::na::Translation { vector },
-                                            rotation,
-                                        } = pose;
-                                        encoder.topic(display::POSE).push(
-                                            vertex!(0; vector[0], vector[1] => rotation.angle(); 0),
-                                        );
-                                        encoder.with_topic(display::PARTICLES, |mut topic| {
-                                            topic.clear();
-                                            topic.extend(filter.particles().iter().map(|p| {
-                                            let Isometry2 {
-                                                translation: parry2d::na::Translation { vector },
-                                                rotation,
-                                            } = p.pose;
-                                            vertex!(0; vector[0], vector[1] => rotation.angle(); 0)
-                                        }));
-                                        });
-                                    })
-                                    .await;
+                                robot.painter.paint_filter(pose, filter.particles()).await;
                                 std::mem::drop(filter);
                                 let odom = model.wheels_to_velocity(wheels).to_odometry();
                                 s += odom.s;

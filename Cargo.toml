@@ -26,4 +26,4 @@ monitor-tool = { path = "../monitor-tool-rs", optional = true, default-features 
 [features]
 default = ["runtime", "display"]
 runtime = ["steering/xbox360"]
-display = ["monitor-tool/sender"]
+display = ["monitor-tool/client"]
