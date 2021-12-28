@@ -158,7 +158,6 @@ impl Robot {
         }
         {
             let robot = robot.clone();
-            // move: let filter = filter.clone();
             task::spawn(async move {
                 let mut s = 0.0;
                 let mut a = 0.0;
@@ -219,8 +218,7 @@ impl Robot {
                 while let Ok(e) = from_lidar.recv().await {
                     use lidar::Event::*;
                     match e {
-                        Connected => {}
-                        Disconnected => {}
+                        Connected | Disconnected => {}
                         FrameEncoded(buf) => {
                             send_async!(Event::LidarFrameEncoded(buf) => event).await;
                         }
