@@ -62,40 +62,42 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
         });
     }
     let (sender, receiver) = unbounded();
-    SupervisorForSingle::<RTKBoard>::default().join(|e| {
-        task::block_on(async {
-            match e {
-                Connected(_, board) => {
-                    println!("CONNECTED    qxwz serial");
-                    send_async!(Event::Connected => sender).await;
-                    *rtcm.lock().await = Some(board.get_receiver());
-                }
-                Disconnected => {
-                    eprintln!("DISCONNECTED qxwz serial");
-                    send_async!(Event::Disconnected => sender).await;
-                    *rtcm.lock().await = None;
-                }
-                Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
-                    Ok(body) => {
-                        send_async!(Event::GPGGA(t, body) => sender).await;
-                        if let Some(ref mut s) = *gpgga.lock().await {
-                            s.send(&line).await;
-                        }
+    task::spawn_blocking(move || {
+        SupervisorForSingle::<RTKBoard>::default().join(|e| {
+            task::block_on(async {
+                match e {
+                    Connected(_, board) => {
+                        println!("CONNECTED    qxwz serial");
+                        send_async!(Event::Connected => sender).await;
+                        *rtcm.lock().await = Some(board.get_receiver());
                     }
-                    Err(WrongHead) => {
-                        if let Some(ref mut s) = *gpgga.lock().await {
-                            s.send(&line).await;
-                        }
+                    Disconnected => {
+                        eprintln!("DISCONNECTED qxwz serial");
+                        send_async!(Event::Disconnected => sender).await;
+                        *rtcm.lock().await = None;
                     }
-                    Err(_) => {}
-                },
-                Event(_, _) => {}
-                ConnectFailed => {
-                    task::sleep(Duration::from_secs(1)).await;
+                    Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
+                        Ok(body) => {
+                            send_async!(Event::GPGGA(t, body) => sender).await;
+                            if let Some(ref mut s) = *gpgga.lock().await {
+                                s.send(&line).await;
+                            }
+                        }
+                        Err(WrongHead) => {
+                            if let Some(ref mut s) = *gpgga.lock().await {
+                                s.send(&line).await;
+                            }
+                        }
+                        Err(_) => {}
+                    },
+                    Event(_, _) => {}
+                    ConnectFailed => {
+                        task::sleep(Duration::from_secs(1)).await;
+                    }
                 }
-            }
-        });
-        true
+            });
+            true
+        })
     });
     receiver
 }
