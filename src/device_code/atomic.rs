@@ -65,6 +65,7 @@ impl AtomicDeviceCode {
         self.0
             .fetch_update(SeqCst, SeqCst, |last| DeviceCode(last).set(indices))
             .ok()
+            .and_then(|c| DeviceCode(c).set(indices))
             .map(|c| DeviceCode(c))
     }
 
@@ -73,6 +74,16 @@ impl AtomicDeviceCode {
         self.0
             .fetch_update(SeqCst, SeqCst, |last| DeviceCode(last).clear(indices))
             .ok()
+            .and_then(|c| DeviceCode(c).clear(indices))
             .map(|c| DeviceCode(c))
     }
+}
+
+#[test]
+fn test() {
+    let mut code = DeviceCode::default();
+    assert_eq!(Some(0b10), code.set(&[1]));
+    assert_eq!(None, code.set(&[1]));
+    assert_eq!(None, code.clear(&[0]));
+    assert_eq!(Some(0), code.clear(&[1]));
 }
