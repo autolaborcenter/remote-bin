@@ -22,6 +22,7 @@ pub(super) enum Event {
 }
 
 pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
+    let _ = *task::block_on(UPDATE_TIME.lock());
     *task::block_on(FILE_PATH.lock()) = dir;
     let gpgga: Arc<Mutex<Option<GpggaSender>>> = Arc::new(Mutex::new(None));
     let rtcm: Arc<Mutex<Option<RTCMReceiver>>> = Arc::new(Mutex::new(None));
@@ -76,20 +77,23 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                         send_async!(Event::Disconnected => sender).await;
                         *rtcm.lock().await = None;
                     }
-                    Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
-                        Ok(body) => {
-                            send_async!(Event::GPGGA(t, body) => sender).await;
-                            if let Some(ref mut s) = *gpgga.lock().await {
-                                s.send(&line).await;
+                    Event(_, Some((t, line))) => {
+                        println!("{:?}", line);
+                        match line.parse::<Gpgga>() {
+                            Ok(body) => {
+                                send_async!(Event::GPGGA(t, body) => sender).await;
+                                if let Some(ref mut s) = *gpgga.lock().await {
+                                    s.send(&line).await;
+                                }
                             }
-                        }
-                        Err(WrongHead) => {
-                            if let Some(ref mut s) = *gpgga.lock().await {
-                                s.send(&line).await;
+                            Err(WrongHead) => {
+                                if let Some(ref mut s) = *gpgga.lock().await {
+                                    s.send(&line).await;
+                                }
                             }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
-                    },
+                    }
                     Event(_, _) => {}
                     ConnectFailed => {
                         task::sleep(Duration::from_secs(1)).await;
@@ -117,13 +121,17 @@ struct AuthFile;
 impl QXWZAccount for AuthFile {
     fn get() -> Option<String> {
         task::block_on(async {
-            match File::open(FILE_PATH.lock().await.clone()).await {
+            let path = FILE_PATH.lock().await.join("auth");
+            match File::open(&path).await {
                 Ok(file) => {
                     let mut reader = BufReader::new(file);
                     let mut line = String::new();
                     match reader.read_line(&mut line).await {
                         Ok(0) | Err(_) => None,
-                        Ok(_) => Some(encode_base64(line)),
+                        Ok(_) => {
+                            println!("path = {:?}, line = {:?}", path, line);
+                            Some(encode_base64(line.trim_end()))
+                        }
                     }
                 }
                 Err(_) => None,
