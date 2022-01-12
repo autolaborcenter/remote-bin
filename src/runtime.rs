@@ -146,10 +146,20 @@ impl Robot {
                             use rtk_qxwz::GpggaStatus::*;
                             match gpgga.status {
                                 浮点解 | 固定解 => {
-                                    filter.lock().await.measure(
+                                    let mut filter = filter.lock().await;
+                                    filter.measure(
                                         t - time_origin,
                                         point(enu.e as f32, enu.n as f32),
                                     );
+                                    let (wheel, weight) = filter
+                                        .fold_models(0.0, |wheel, model, weight| {
+                                            wheel + model.wheel * weight
+                                        });
+                                    if weight.is_normal() {
+                                        let wheel = wheel / weight;
+                                        filter.parameters.default_model.wheel = wheel;
+                                        println!("wheel = {}", wheel);
+                                    }
                                 }
                                 _ => {}
                             }
