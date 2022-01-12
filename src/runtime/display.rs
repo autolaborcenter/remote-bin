@@ -77,14 +77,7 @@ impl Painter {
 
     /// 配置目标地址
     pub async fn connect<A: ToSocketAddrs>(&self, a: A) {
-        if let Ok(()) = self.0.connect(a).await {
-            let clear = Encoder::with(|encoder| {
-                for topic in POSE_GROUP {
-                    encoder.topic(topic).clear();
-                }
-            });
-            let _ = self.0.send(clear.as_slice()).await;
-        }
+        let _ = self.0.connect(a).await;
     }
 }
 
@@ -103,8 +96,9 @@ fn send_config(socket: Arc<UdpSocket>, period: Duration) {
                 0,
                 &[
                     (0, rgba!(RED; 0.25)),
-                    (1, rgba!(YELLOW; 0.5)),
-                    (2, rgba!(GREEN; 0.5)),
+                    (1, rgba!(ORANGE; 0.5)),
+                    (2, rgba!(YELLOW; 0.5)),
+                    (3, rgba!(GREEN; 0.5)),
                 ],
                 |_| {},
             );

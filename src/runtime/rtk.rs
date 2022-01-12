@@ -77,23 +77,23 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                         send_async!(Event::Disconnected => sender).await;
                         *rtcm.lock().await = None;
                     }
-                    Event(_, Some((t, line))) => {
-                        println!("{:?}", line);
-                        match line.parse::<Gpgga>() {
-                            Ok(body) => {
-                                send_async!(Event::GPGGA(t, body) => sender).await;
-                                if let Some(ref mut s) = *gpgga.lock().await {
-                                    s.send(&line).await;
-                                }
+                    Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
+                        Ok(body) => {
+                            send_async!(Event::GPGGA(t, body) => sender).await;
+                            if let Some(ref mut s) = *gpgga.lock().await {
+                                s.send(&line).await;
                             }
-                            Err(WrongHead) => {
-                                if let Some(ref mut s) = *gpgga.lock().await {
-                                    s.send(&line).await;
-                                }
-                            }
-                            Err(_) => {}
                         }
-                    }
+                        Err(WrongHead) => {
+                            println!("{:?}", line);
+                            if let Some(ref mut s) = *gpgga.lock().await {
+                                s.send(&line).await;
+                            }
+                        }
+                        Err(_) => {
+                            println!("{:?}", line);
+                        }
+                    },
                     Event(_, _) => {}
                     ConnectFailed => {
                         task::sleep(Duration::from_secs(1)).await;

@@ -139,6 +139,8 @@ impl Robot {
                                 longitude: float!(gpgga.longitude),
                                 altitude: float!(gpgga.altitude),
                             });
+                            println!("{:?}", gpgga);
+                            println!("{:?}", enu);
                             #[cfg(feature = "display")]
                             robot.painter.paint_gps(gpgga.status, enu).await;
                             use rtk_qxwz::GpggaStatus::*;

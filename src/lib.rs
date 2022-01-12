@@ -8,9 +8,9 @@ mod runtime;
 pub use runtime::*;
 
 pub const LOCAL_ORIGIN: WGS84 = WGS84 {
-    latitude: 0.0,
-    longitude: 0.0,
-    altitude: 0.0,
+    latitude: 39.5960,
+    longitude: 116.1968,
+    altitude: 51.75,
 };
 
 pub use device_code::DeviceCode;
