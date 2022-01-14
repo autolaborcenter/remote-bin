@@ -80,12 +80,6 @@ enum Task {
 
 const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
 
-macro_rules! float {
-    ($pair:expr) => {
-        $pair.0 as f64 * 0.1f64.powi($pair.1 as i32)
-    };
-}
-
 impl Robot {
     pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
         let device_code = AtomicDeviceCode::default();
@@ -135,9 +129,9 @@ impl Robot {
                         }
                         GPGGA(t, gpgga) => {
                             let enu = local_ref.wgs84_to_enu(WGS84 {
-                                latitude: float!(gpgga.latitude),
-                                longitude: float!(gpgga.longitude),
-                                altitude: float!(gpgga.altitude),
+                                latitude: gpgga.latitude,
+                                longitude: gpgga.longitude,
+                                altitude: gpgga.altitude,
                             });
                             println!("{:?}", gpgga);
                             println!("{:?}", enu);
@@ -204,20 +198,18 @@ impl Robot {
                             let mut filter = filter.lock().await;
                             filter.update(t - time_origin, wheels);
                             update_wheel!(filter);
+                            let model = filter.parameters.default_model.clone();
+                            let odom = model.wheels_to_velocity(wheels).to_odometry();
+                            s += odom.s;
+                            a += odom.a;
+                            send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event).await;
+                            robot.chassis.update_model(model).await;
                             if let Some(pose) = filter.get() {
-                                let model = filter.parameters.default_model.clone();
                                 #[cfg(feature = "display")]
                                 robot.painter.paint_filter(pose, filter.particles()).await;
                                 std::mem::drop(filter);
-                                let odom = model.wheels_to_velocity(wheels).to_odometry();
-                                s += odom.s;
-                                a += odom.a;
-                                join!(
-                                    send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event),
-                                    send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                    robot.chassis.update_model(model),
-                                    robot.automatic(pose),
-                                );
+                                send_async!(Event::PoseUpdated(pose.into()) => robot.event).await;
+                                robot.automatic(pose).await;
                             }
                         }
                     }

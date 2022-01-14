@@ -8,8 +8,8 @@ mod runtime;
 pub use runtime::*;
 
 pub const LOCAL_ORIGIN: WGS84 = WGS84 {
-    latitude: 39.5960,
-    longitude: 116.1968,
+    latitude: 39.993,
+    longitude: 116.327,
     altitude: 51.75,
 };
 

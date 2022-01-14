@@ -59,6 +59,9 @@ impl Painter {
                 rotation,
             } = pose;
             encoder
+                .topic(FOCUS)
+                .push(vertex!(0; vector[0], vector[1]; Circle, 2.0; 0));
+            encoder
                 .topic(POSE)
                 .push(vertex!(0; vector[0], vector[1] => rotation.angle(); 0));
             encoder.with_topic(PARTICLES, |mut topic| {
