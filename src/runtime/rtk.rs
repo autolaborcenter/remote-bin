@@ -85,14 +85,11 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                             }
                         }
                         Err(WrongHead) => {
-                            println!("{:?}", line);
                             if let Some(ref mut s) = *gpgga.lock().await {
                                 s.send(&line).await;
                             }
                         }
-                        Err(_) => {
-                            println!("{:?}", line);
-                        }
+                        Err(_) => {}
                     },
                     Event(_, _) => {}
                     ConnectFailed => {
@@ -128,10 +125,7 @@ impl QXWZAccount for AuthFile {
                     let mut line = String::new();
                     match reader.read_line(&mut line).await {
                         Ok(0) | Err(_) => None,
-                        Ok(_) => {
-                            println!("path = {:?}, line = {:?}", path, line);
-                            Some(encode_base64(line.trim_end()))
-                        }
+                        Ok(_) => Some(encode_base64(line.trim_end())),
                     }
                 }
                 Err(_) => None,

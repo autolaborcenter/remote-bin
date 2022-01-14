@@ -12,6 +12,7 @@ use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
 use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
 use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
+use rtk_qxwz::GpggaStatus;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
@@ -59,6 +60,7 @@ pub enum Event {
     ConnectionModified(DeviceCode),
     ChassisStatusUpdated(PM1Status),
     ChassisOdometerUpdated(f32, f32),
+    RtkStatusUpdated(GpggaStatus),
     PoseUpdated(Pose),
     LidarFrameEncoded(Vec<u8>),
     CollisionDetected(f32),
@@ -114,6 +116,7 @@ impl Robot {
             let device_code = device_code.clone();
             task::spawn(async move {
                 let local_ref = LocalReference::from(super::LOCAL_ORIGIN);
+                let mut status = GpggaStatus::无效解;
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
                     match e {
@@ -133,13 +136,14 @@ impl Robot {
                                 longitude: gpgga.longitude,
                                 altitude: gpgga.altitude,
                             });
-                            println!("{:?}", gpgga);
-                            println!("{:?}", enu);
                             #[cfg(feature = "display")]
                             robot.painter.paint_gps(gpgga.status, enu).await;
-                            use rtk_qxwz::GpggaStatus::*;
+                            if status != gpgga.status {
+                                status = gpgga.status;
+                                send_async!(Event::RtkStatusUpdated(status) => robot.event).await;
+                            }
                             match gpgga.status {
-                                浮点解 | 固定解 => {
+                                GpggaStatus::浮点解 | GpggaStatus::固定解 => {
                                     let mut filter = filter.lock().await;
                                     filter.measure(
                                         t - time_origin,
