@@ -120,13 +120,23 @@ impl Robot {
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
                     match e {
-                        Connected => {
+                        SerialConnected => {
                             if let Some(code) = device_code.set(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        Disconnected => {
+                        SerialDisconnected => {
                             if let Some(code) = device_code.clear(&[2]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
+                            }
+                        }
+                        TcpConnected => {
+                            if let Some(code) = device_code.set(&[3]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
+                            }
+                        }
+                        TcpDisconnected => {
+                            if let Some(code) = device_code.clear(&[3]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
@@ -157,6 +167,13 @@ impl Robot {
                                         let wheel = wheel / weight;
                                         filter.parameters.default_model.wheel = wheel;
                                         println!("wheel = {}", wheel);
+                                    }
+                                    if let Some(pose) = filter.get() {
+                                        #[cfg(feature = "display")]
+                                        robot.painter.paint_filter(pose, filter.particles()).await;
+                                        std::mem::drop(filter);
+                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event).await;
+                                        robot.automatic(pose).await;
                                     }
                                 }
                                 _ => {}

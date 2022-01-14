@@ -16,8 +16,10 @@ use rtk_qxwz::{
 use std::time::{Duration, Instant};
 
 pub(super) enum Event {
-    Connected,
-    Disconnected,
+    SerialConnected,
+    SerialDisconnected,
+    TcpConnected,
+    TcpDisconnected,
     GPGGA(Instant, Gpgga),
 }
 
@@ -26,9 +28,11 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
     *task::block_on(FILE_PATH.lock()) = dir;
     let gpgga: Arc<Mutex<Option<GpggaSender>>> = Arc::new(Mutex::new(None));
     let rtcm: Arc<Mutex<Option<RTCMReceiver>>> = Arc::new(Mutex::new(None));
+    let (sender, receiver) = unbounded();
     {
         let gpgga = gpgga.clone();
         let rtcm = rtcm.clone();
+        let sender = sender.clone();
 
         task::spawn_blocking(move || {
             let mut account = String::new();
@@ -38,12 +42,12 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                     task::block_on(async {
                         match e {
                             Connected(key, stream) => {
-                                println!("CONNECTED    qxwz tcp");
+                                send_async!(Event::TcpConnected => sender).await;
                                 *gpgga.lock().await = Some(stream.get_sender());
                                 account = key;
                             }
                             Disconnected => {
-                                eprintln!("DISCONNECTED qxwz tcp");
+                                send_async!(Event::TcpDisconnected => sender).await;
                                 *gpgga.lock().await = None;
                             }
                             Event(_, Some((_, buf))) => {
@@ -59,22 +63,20 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                         *UPDATE_TIME.lock().await < time
                     })
                 });
+                task::block_on(send_async!(Event::TcpDisconnected => sender));
             }
         });
     }
-    let (sender, receiver) = unbounded();
     task::spawn_blocking(move || {
         SupervisorForSingle::<RTKBoard>::default().join(|e| {
             task::block_on(async {
                 match e {
                     Connected(_, board) => {
-                        println!("CONNECTED    qxwz serial");
-                        send_async!(Event::Connected => sender).await;
+                        send_async!(Event::SerialConnected => sender).await;
                         *rtcm.lock().await = Some(board.get_receiver());
                     }
                     Disconnected => {
-                        eprintln!("DISCONNECTED qxwz serial");
-                        send_async!(Event::Disconnected => sender).await;
+                        send_async!(Event::SerialDisconnected => sender).await;
                         *rtcm.lock().await = None;
                     }
                     Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
