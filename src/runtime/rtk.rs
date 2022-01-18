@@ -61,6 +61,7 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                             }
                         }
                         *UPDATE_TIME.lock().await < time
+                            && time < Instant::now() + Duration::from_secs(300)
                     })
                 });
                 task::block_on(send_async!(Event::TcpDisconnected => sender));
