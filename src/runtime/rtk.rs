@@ -20,7 +20,7 @@ pub(super) enum Event {
     SerialDisconnected,
     TcpConnected,
     TcpDisconnected,
-    GPGGA(Instant, Gpgga),
+    Gpgga(Instant, Gpgga),
 }
 
 pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
@@ -82,7 +82,7 @@ pub(super) fn supervisor(dir: PathBuf) -> Receiver<Event> {
                     }
                     Event(_, Some((t, line))) => match line.parse::<Gpgga>() {
                         Ok(body) => {
-                            send_async!(Event::GPGGA(t, body) => sender).await;
+                            send_async!(Event::Gpgga(t, body) => sender).await;
                             if let Some(ref mut s) = *gpgga.lock().await {
                                 s.send(&line).await;
                             }

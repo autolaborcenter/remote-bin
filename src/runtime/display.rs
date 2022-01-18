@@ -31,7 +31,7 @@ impl Painter {
 
     /// 绘图
     #[inline]
-    pub async fn paint(&self, f: impl FnOnce(&mut Encoder) -> ()) {
+    pub async fn paint(&self, f: impl FnOnce(&mut Encoder)) {
         let _ = self.0.send(&Encoder::with(f)).await;
     }
 

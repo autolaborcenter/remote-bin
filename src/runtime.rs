@@ -140,7 +140,7 @@ impl Robot {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        GPGGA(t, gpgga) => {
+                        Gpgga(t, gpgga) => {
                             let enu = local_ref.wgs84_to_enu(WGS84 {
                                 latitude: gpgga.latitude,
                                 longitude: gpgga.longitude,
@@ -172,7 +172,8 @@ impl Robot {
                                         #[cfg(feature = "display")]
                                         robot.painter.paint_filter(pose, filter.particles()).await;
                                         std::mem::drop(filter);
-                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event).await;
+                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event)
+                                            .await;
                                         robot.automatic(pose).await;
                                     }
                                 }
@@ -208,11 +209,8 @@ impl Robot {
                                     send_async!(Event::ConnectionModified(code) => robot.event)
                                         .await;
                                 }
-                            } else {
-                                if let Some(code) = device_code.clear(&[1]) {
-                                    send_async!(Event::ConnectionModified(code) => robot.event)
-                                        .await;
-                                }
+                            } else if let Some(code) = device_code.clear(&[1]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         WheelsUpdated(t, wheels) => {
@@ -272,7 +270,7 @@ impl Robot {
             });
         }
 
-        (robot.clone(), to_extern)
+        (robot, to_extern)
     }
 
     #[cfg(feature = "display")]
@@ -359,7 +357,7 @@ impl Robot {
                 if self.drive_blocking.try_drive_automatic().await {
                     let clone = context.clone();
                     let mut tracker = Tracker {
-                        path: &path,
+                        path,
                         context: clone,
                     };
                     if let Ok((k, rudder)) = tracker.track(pose) {

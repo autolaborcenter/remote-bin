@@ -69,7 +69,7 @@ impl Lidar {
                     Connected(k, driver) => {
                         task::block_on(send_async!(Event::Connected => event));
                         // 为 LD19 设置置信度阈值
-                        *driver.inner.min_confidence() = 120;
+                        *driver.inner.min_confidence_mut() = 120;
                         if let Some(i) = indexer.add(k.clone()) {
                             // 为雷达设置过滤器
                             driver.filter = FILTERS[i];
@@ -103,7 +103,7 @@ impl Lidar {
                             }
                         }
                         // 发送
-                        if indexer.len() > 0 && now >= send_time {
+                        if !indexer.is_empty() && now >= send_time {
                             send_time = now + Duration::from_millis(100);
                             let mut buf = vec![0, 0];
                             collectors[1].write_to(&mut buf);

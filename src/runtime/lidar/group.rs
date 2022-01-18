@@ -47,15 +47,15 @@ impl Collector {
             });
         }
         // 保存编码
-        let ref mut bits = self.bits;
+        let bits = &mut self.bits;
         if bits.len() <= i {
-            bits.resize_with(i + 1, || Vec::new());
+            bits.resize_with(i + 1, Vec::new);
         }
         bits[i] = zipped;
         // 保存点云
-        let ref mut points = self.points.lock().await;
+        let points = &mut self.points.lock().await;
         if points.len() <= i {
-            points.resize_with(i + 1, || Vec::new());
+            points.resize_with(i + 1, Vec::new);
         }
         points[i] = transed;
     }
@@ -208,7 +208,7 @@ impl Force {
 }
 
 #[inline]
-fn bytes_of<'a, T: Sized>(t: &'a T) -> &'a [u8] {
+fn bytes_of<T: Sized>(t: &T) -> &[u8] {
     unsafe { std::slice::from_raw_parts(t as *const _ as *const u8, std::mem::size_of::<T>()) }
 }
 

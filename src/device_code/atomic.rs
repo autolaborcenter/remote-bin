@@ -66,7 +66,7 @@ impl AtomicDeviceCode {
             .fetch_update(SeqCst, SeqCst, |last| DeviceCode(last).set(indices))
             .ok()
             .and_then(|c| DeviceCode(c).set(indices))
-            .map(|c| DeviceCode(c))
+            .map(DeviceCode)
     }
 
     #[inline]
@@ -75,7 +75,7 @@ impl AtomicDeviceCode {
             .fetch_update(SeqCst, SeqCst, |last| DeviceCode(last).clear(indices))
             .ok()
             .and_then(|c| DeviceCode(c).clear(indices))
-            .map(|c| DeviceCode(c))
+            .map(DeviceCode)
     }
 }
 

@@ -73,7 +73,7 @@ impl Chassis {
             SupervisorForSingle::<PM1>::default().join(|e| {
                 match e {
                     Connected(_, driver) => {
-                        join_async!(
+                        if let Some(m) = join_async!(
                             send_async!(Event::Connected => event),
                             send_async!(Event::StatusUpdated(*driver.status()) => event),
                             chassis.set_predictor(driver),
@@ -81,7 +81,9 @@ impl Chassis {
                         )
                         .3
                         .take()
-                        .map(|m| driver.model = m);
+                        {
+                            driver.model = m;
+                        }
                     }
                     Disconnected => {
                         join_async! {
@@ -94,9 +96,9 @@ impl Chassis {
                     }
                     Event(driver, e) => {
                         driver.set_target(*task::block_on(chassis.0.target.lock()));
-                        task::block_on(chassis.0.model.lock())
-                            .take()
-                            .map(|m| driver.model = m);
+                        if let Some(m) = task::block_on(chassis.0.model.lock()).take() {
+                            driver.model = m
+                        }
                         use PM1Event::*;
                         match e {
                             Some((time, Wheels(wheels))) => {
