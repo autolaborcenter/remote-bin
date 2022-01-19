@@ -951,9 +951,10 @@ dependencies = [
 
 [[package]]
 name = "pose-filter"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chassis",
+ "lazy_static",
  "nalgebra",
  "rand",
 ]
@@ -1356,9 +1357,9 @@ checksum = "9d5b2c62b4012a3e1eca5a7e077d13b3bf498c4073e33ccd58626607748ceeca"
 
 [[package]]
 name = "wasi"
-version = "0.10.2+wasi-snapshot-preview1"
+version = "0.10.3+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
+checksum = "46a2e384a3f170b0c7543787a91411175b71afd56ba4d3a0ae5678d4e2243c0e"
 
 [[package]]
 name = "wasm-bindgen"

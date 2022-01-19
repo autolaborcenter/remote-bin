@@ -6,9 +6,7 @@
                 default_model: Pm1Model::new(0.465, 0.355, 0.105),
                 memory_rate: 0.75,
                 count: 80,
-                measure_weight: 8.0,
                 beacon_on_robot: point(-0.30, 0.15),
-                max_inconsistency: 0.4,
             },
             |model, weight| {
                 Pm1Model::new(

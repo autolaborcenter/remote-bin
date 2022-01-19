@@ -152,32 +152,40 @@ impl Robot {
                                 status = gpgga.status;
                                 send_async!(Event::RtkStatusUpdated(status) => robot.event).await;
                             }
-                            match gpgga.status {
-                                GpggaStatus::浮点解 | GpggaStatus::固定解 => {
-                                    let mut filter = filter.lock().await;
-                                    filter.measure(
-                                        t - time_origin,
-                                        point(enu.e as f32, enu.n as f32),
-                                    );
-                                    let (wheel, weight) = filter
-                                        .fold_models(0.0, |wheel, model, weight| {
-                                            wheel + model.wheel * weight
-                                        });
-                                    if weight.is_normal() {
-                                        let wheel = wheel / weight;
-                                        filter.parameters.default_model.wheel = wheel;
-                                        println!("wheel = {}", wheel);
-                                    }
-                                    if let Some(pose) = filter.get() {
-                                        #[cfg(feature = "display")]
-                                        robot.painter.paint_filter(pose, filter.particles()).await;
-                                        std::mem::drop(filter);
-                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event)
-                                            .await;
-                                        robot.automatic(pose).await;
-                                    }
+                            if let Some(sigma) = match gpgga.status {
+                                GpggaStatus::单点解 => Some(0.32),
+                                GpggaStatus::伪距差分 => Some(0.16),
+                                GpggaStatus::浮点解 => Some(0.08),
+                                GpggaStatus::固定解 => Some(0.04),
+                                GpggaStatus::无效解
+                                | GpggaStatus::PPS
+                                | GpggaStatus::航位推算
+                                | GpggaStatus::用户输入
+                                | GpggaStatus::PPP => None,
+                            } {
+                                let mut filter = filter.lock().await;
+                                filter.measure(
+                                    t - time_origin,
+                                    point(enu.e as f32, enu.n as f32),
+                                    sigma,
+                                );
+                                let (wheel, weight) = filter
+                                    .fold_models(0.0, |wheel, model, weight| {
+                                        wheel + model.wheel * weight
+                                    });
+                                if weight.is_normal() {
+                                    let wheel = wheel / weight;
+                                    filter.parameters.default_model.wheel = wheel;
+                                    println!("wheel = {}", wheel);
                                 }
-                                _ => {}
+                                if let Some(pose) = filter.get() {
+                                    #[cfg(feature = "display")]
+                                    robot.painter.paint_filter(pose, filter.particles()).await;
+                                    std::mem::drop(filter);
+                                    send_async!(Event::PoseUpdated(pose.into()) => robot.event)
+                                        .await;
+                                    robot.automatic(pose).await;
+                                }
                             }
                         }
                     }
