@@ -8,20 +8,22 @@ readme = "README.md"
 [dependencies]
 pm1-sdk = { path = "../pm1-sdk-3" }
 lidar-ld19 = { path = "../lidar-ld19" }
-rtk-ins570 = { path = "../rtk-ins570" }
 rtk-qxwz = { path = "../rtk-qxwz" }
+gnss = { path = "../gnss" }
 pose-filter = { path = "../pose-filter" }
 path-tracking = { path = "../path-tracking" }
-steering = { path = "../steering", optional = true, features = ["xbox360"] }
+steering = { path = "../steering" }
 
-async-std = { version = "*", features = ["attributes", "unstable"] }
+async-std = { version = "*", features = ["unstable"] }
 futures = { version = "*", default-features = false, features = [
     "async-await", # 只要个 join!
 ] }
 parry2d = { version = "*", features = ["simd-stable"] }
 lazy_static = "*"
 
+monitor-tool = { path = "../monitor-tool-rs", optional = true, default-features = false }
+
 [features]
-default = ["runtime", "wired-joystick"]
-runtime = []
-wired-joystick = ["steering"]
+default = ["runtime", "display"]
+runtime = ["steering/xbox360"]
+display = ["monitor-tool/client"]

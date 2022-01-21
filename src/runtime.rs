@@ -1,4 +1,6 @@
-﻿use crate::{DeviceCode, Odometry, Physical, Pose};
+﻿use crate::{
+    device_code::AtomicDeviceCode, DeviceCode, LocalReference, Odometry, Physical, Pose, WGS84,
+};
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     path::PathBuf,
@@ -6,11 +8,11 @@ use async_std::{
     task,
 };
 use futures::join;
-use parry2d::na::{Isometry2, Vector2};
+use parry2d::na::{Isometry2, Point, Point2, Vector2};
 use path_tracking::{Parameters, Path, PathFile, RecordFile, Sector, TrackContext, Tracker};
-use pm1_sdk::model::{Pm1Predictor, TrajectoryPredictor};
-use pose_filter::{InterpolationFilter, PoseFilter, PoseType};
-use rtk_ins570::{Solution, SolutionState};
+use pm1_sdk::model::{Pm1Model, Pm1Predictor, TrajectoryPredictor};
+use pose_filter::{gaussian, ParticleFilter, ParticleFilterParameters};
+use rtk_qxwz::GpggaStatus;
 use std::{
     f32::consts::{FRAC_PI_2, FRAC_PI_8, PI},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
@@ -18,13 +20,21 @@ use std::{
 };
 
 mod chassis;
+#[macro_use]
+mod filter;
+mod drive_blocking;
+mod joystick;
 mod lidar;
 mod rtk;
 
-#[cfg(feature = "wired-joystick")]
-mod joystick;
+#[cfg(feature = "display")]
+mod display;
+
+#[cfg(feature = "display")]
+use display::*;
 
 use chassis::Chassis;
+use drive_blocking::DriveBlocking;
 use lidar::Lidar;
 
 pub use pm1_sdk::PM1Status;
@@ -38,16 +48,19 @@ pub struct Robot {
     lidar: Lidar,
     event: Sender<Event>,
 
-    artificial_deadline: Arc<Mutex<Instant>>,
-    joystick_deadline: Arc<Mutex<Instant>>,
+    drive_blocking: DriveBlocking,
     tracking_speed: Arc<AtomicU32>,
     task: Arc<Mutex<Task>>,
+
+    #[cfg(feature = "display")]
+    painter: Painter,
 }
 
 pub enum Event {
     ConnectionModified(DeviceCode),
     ChassisStatusUpdated(PM1Status),
     ChassisOdometerUpdated(f32, f32),
+    RtkStatusUpdated(GpggaStatus),
     PoseUpdated(Pose),
     LidarFrameEncoded(Vec<u8>),
     CollisionDetected(f32),
@@ -67,14 +80,11 @@ enum Task {
     Track(Path, TrackContext),
 }
 
-#[cfg(feature = "wired-joystick")]
-const JOYSTICK_TIMEOUT: Duration = Duration::from_millis(500); // 手柄控制保护期
-
-const ARTIFICIAL_TIMEOUT: Duration = Duration::from_millis(500); // 人工控制保护期
-const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // ----------------- // 主动避障强度
+const ACTIVE_COLLISION_AVOIDING: f32 = 2.5; // 主动避障强度
 
 impl Robot {
     pub async fn spawn(mut context_dir: PathBuf, rtk: bool) -> (Self, Receiver<Event>) {
+        let device_code = AtomicDeviceCode::default();
         let rtk = if rtk {
             rtk::supervisor(context_dir.clone())
         } else {
@@ -83,126 +93,151 @@ impl Robot {
         let (chassis, from_chassis) = Chassis::supervisor();
         let (lidar, from_lidar) = Lidar::supervisor();
         let (event, to_extern) = unbounded();
-        let device_code = Arc::new(Mutex::new(DeviceCode::default()));
 
-        let now = Instant::now();
         context_dir.push("path");
         let robot = Self {
             context_dir,
             chassis,
             lidar,
             event,
-            joystick_deadline: Arc::new(Mutex::new(now)),
-            artificial_deadline: Arc::new(Mutex::new(now)),
+
+            drive_blocking: DriveBlocking::new(),
             tracking_speed: Arc::new(AtomicU32::new(0f32.to_bits())),
             task: Arc::new(Mutex::new(Task::Idle)),
+            #[cfg(feature = "display")]
+            painter: Painter::new().await,
         };
 
-        let filter = Arc::new(Mutex::new(InterpolationFilter::new()));
+        let filter = particle_filter!();
         let time_origin = Instant::now();
         {
             let filter = filter.clone();
             let robot = robot.clone();
             let device_code = device_code.clone();
             task::spawn(async move {
-                let mut state_mem = Default::default();
+                let local_ref = LocalReference::from(super::LOCAL_ORIGIN);
+                let mut status = GpggaStatus::无效解;
                 while let Ok(e) = rtk.recv().await {
                     use rtk::Event::*;
                     match e {
-                        Connected => {
-                            if let Some(code) = device_code.lock().await.set(&[2]) {
+                        SerialConnected => {
+                            if let Some(code) = device_code.set(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(&[2, 4]) {
+                        SerialDisconnected => {
+                            if let Some(code) = device_code.clear(&[2]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        SolutionUpdated(t, s) => match s {
-                            Solution::Uninitialized(state) => {
-                                if state != state_mem {
-                                    state_mem = state;
-                                    println!("{}", state);
+                        TcpConnected => {
+                            if let Some(code) = device_code.set(&[3]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
+                            }
+                        }
+                        TcpDisconnected => {
+                            if let Some(code) = device_code.clear(&[3]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
+                            }
+                        }
+                        Gpgga(t, gpgga) => {
+                            let enu = local_ref.wgs84_to_enu(WGS84 {
+                                latitude: gpgga.latitude,
+                                longitude: gpgga.longitude,
+                                altitude: gpgga.altitude,
+                            });
+                            #[cfg(feature = "display")]
+                            robot.painter.paint_gps(gpgga.status, enu).await;
+                            if status != gpgga.status {
+                                status = gpgga.status;
+                                send_async!(Event::RtkStatusUpdated(status) => robot.event).await;
+                            }
+                            if let Some(sigma) = match gpgga.status {
+                                GpggaStatus::单点解 => Some(0.32),
+                                GpggaStatus::伪距差分 => Some(0.16),
+                                GpggaStatus::浮点解 => Some(0.08),
+                                GpggaStatus::固定解 => Some(0.04),
+                                GpggaStatus::无效解
+                                | GpggaStatus::PPS
+                                | GpggaStatus::航位推算
+                                | GpggaStatus::用户输入
+                                | GpggaStatus::PPP => None,
+                            } {
+                                let mut filter = filter.lock().await;
+                                filter.measure(
+                                    t - time_origin,
+                                    point(enu.e as f32, enu.n as f32),
+                                    sigma,
+                                );
+                                let (wheel, weight) = filter
+                                    .fold_models(0.0, |wheel, model, weight| {
+                                        wheel + model.wheel * weight
+                                    });
+                                if weight.is_normal() {
+                                    let wheel = wheel / weight;
+                                    filter.parameters.default_model.wheel = wheel;
+                                    println!("wheel = {}", wheel);
+                                }
+                                if let Some(pose) = filter.get() {
+                                    #[cfg(feature = "display")]
+                                    robot.painter.paint_filter(pose, filter.particles()).await;
+                                    std::mem::drop(filter);
+                                    send_async!(Event::PoseUpdated(pose.into()) => robot.event)
+                                        .await;
+                                    robot.automatic(pose).await;
                                 }
                             }
-                            Solution::Data { state, enu, dir } => {
-                                let SolutionState {
-                                    state_pos,
-                                    state_dir,
-                                    satellites: _,
-                                } = state;
-                                if state_pos > 40 && state_dir > 30 {
-                                    let (sin, cos) = (dir as f32).sin_cos();
-                                    let pose = filter.lock().await.update(
-                                        PoseType::Absolute,
-                                        t - time_origin,
-                                        isometry(enu.e as f32, enu.n as f32, cos, sin),
-                                    );
-                                    if let Some(code) = device_code.lock().await.set(&[3, 4]) {
-                                        send_async!(Event::ConnectionModified(code) => robot.event)
-                                            .await;
-                                    }
-                                    join!(
-                                        send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                        robot.automatic(pose),
-                                    );
-                                } else if state != state_mem {
-                                    if let Some(code) = device_code.lock().await.clear(&[4]) {
-                                        send_async!(Event::ConnectionModified(code) => robot.event)
-                                            .await;
-                                    }
-                                    state_mem = state;
-                                    println!("{}", state);
-                                }
-                            }
-                        },
+                        }
                     }
                 }
             });
         }
         {
             let robot = robot.clone();
-            // move: let filter = filter.clone();
             task::spawn(async move {
+                let mut s = 0.0;
+                let mut a = 0.0;
                 while let Ok(e) = from_chassis.recv().await {
                     use chassis::Event::*;
                     match e {
                         Connected => {
-                            if let Some(code) = device_code.lock().await.set(&[0]) {
+                            if let Some(code) = device_code.set(&[0]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         Disconnected => {
-                            if let Some(code) = device_code.lock().await.clear(&[0, 1]) {
+                            if let Some(code) = device_code.clear(&[0, 1]) {
                                 send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
                         StatusUpdated(s) => {
                             send_async!(Event::ChassisStatusUpdated(s) => robot.event).await;
                             if s.power_switch {
-                                if let Some(code) = device_code.lock().await.set(&[1]) {
+                                if let Some(code) = device_code.set(&[1]) {
                                     send_async!(Event::ConnectionModified(code) => robot.event)
                                         .await;
                                 }
-                            } else {
-                                if let Some(code) = device_code.lock().await.clear(&[1]) {
-                                    send_async!(Event::ConnectionModified(code) => robot.event)
-                                        .await;
-                                }
+                            } else if let Some(code) = device_code.clear(&[1]) {
+                                send_async!(Event::ConnectionModified(code) => robot.event).await;
                             }
                         }
-                        OdometryUpdated(t, o) => {
-                            let pose = filter.lock().await.update(
-                                PoseType::Relative,
-                                t - time_origin,
-                                o.pose,
-                            );
-                            join!(
-                                send_async!(Event::ChassisOdometerUpdated(o.s, o.a) => robot.event),
-                                send_async!(Event::PoseUpdated(pose.into()) => robot.event),
-                                robot.automatic(pose),
-                            );
+                        WheelsUpdated(t, wheels) => {
+                            let mut filter = filter.lock().await;
+                            filter.update(t - time_origin, wheels);
+                            update_wheel!(filter);
+                            let model = filter.parameters.default_model.clone();
+                            let odom = model.wheels_to_velocity(wheels).to_odometry();
+                            s += odom.s;
+                            a += odom.a;
+                            send_async!(Event::ChassisOdometerUpdated(s, a) => robot.event).await;
+                            robot.chassis.update_model(model).await;
+                            if let Some(pose) = filter.get() {
+                                #[cfg(feature = "display")]
+                                robot.painter.paint_filter(pose, filter.particles()).await;
+                                std::mem::drop(filter);
+                                send_async!(Event::PoseUpdated(pose.into()) => robot.event).await;
+                                robot.automatic(pose).await;
+                            }
                         }
                     }
                 }
@@ -214,8 +249,7 @@ impl Robot {
                 while let Ok(e) = from_lidar.recv().await {
                     use lidar::Event::*;
                     match e {
-                        Connected => {}
-                        Disconnected => {}
+                        Connected | Disconnected => {}
                         FrameEncoded(buf) => {
                             send_async!(Event::LidarFrameEncoded(buf) => event).await;
                         }
@@ -223,34 +257,42 @@ impl Robot {
                 }
             });
         }
-        #[cfg(feature = "wired-joystick")]
         {
             let robot = robot.clone();
             task::spawn_blocking(move || {
                 let mut joystick = joystick::Joystick::new();
                 loop {
                     let target = joystick.get();
-                    if !target.is_released() {
-                        task::block_on(async {
-                            let deadline = Instant::now() + JOYSTICK_TIMEOUT;
-                            *robot.joystick_deadline.lock().await = deadline;
-                        });
-                        task::block_on(robot.drive_and_warn(target, 0.0));
-                        std::thread::sleep(Duration::from_millis(50));
-                    } else {
-                        std::thread::sleep(Duration::from_millis(400));
-                    }
+                    task::block_on(async {
+                        if !target.is_released() {
+                            join!(
+                                robot.drive_blocking.drive_joystick(),
+                                robot.drive_and_warn(target, 0.0),
+                                task::sleep(Duration::from_millis(50)),
+                            );
+                        } else {
+                            task::sleep(Duration::from_millis(400)).await;
+                        }
+                    });
                 }
             });
         }
 
-        (robot.clone(), to_extern)
+        (robot, to_extern)
     }
 
+    #[cfg(feature = "display")]
+    #[inline]
+    pub async fn panit_to<A: async_std::net::ToSocketAddrs>(&self, a: A) {
+        self.painter.connect(a).await;
+    }
+
+    #[inline]
     pub fn set_tracking_speed(&self, val: f32) {
         self.tracking_speed.store(val.to_bits(), Relaxed);
     }
 
+    #[inline]
     pub async fn read_path(&self) -> Option<Vec<Isometry2<f32>>> {
         PathFile::open(self.context_dir.as_path())
             .await
@@ -258,6 +300,7 @@ impl Robot {
             .map(|f| f.collect())
     }
 
+    #[inline]
     pub async fn record(&self) {
         *self.task.lock().await = Task::WaitingPose;
     }
@@ -283,27 +326,20 @@ impl Robot {
         Ok(())
     }
 
+    #[inline]
     pub async fn stop(&self) {
         *self.task.lock().await = Task::Idle;
     }
 
+    #[inline]
     pub async fn predict(&self) -> Option<Trajectory> {
         self.chassis.predict().await
     }
 
     pub async fn drive(&self, target: Physical) {
-        #[cfg(not(feature = "wired-joystick"))]
-        if *self.joystick_deadline.lock().await >= Instant::now() {
-            return;
+        if self.drive_blocking.try_drive_artificial().await {
+            self.check_and_drive(target).await;
         }
-
-        join!(
-            async {
-                let deadline = Instant::now() + ARTIFICIAL_TIMEOUT;
-                *self.artificial_deadline.lock().await = deadline;
-            },
-            self.check_and_drive(target)
-        );
     }
 
     async fn automatic(&self, pose: Isometry2<f32>) {
@@ -326,26 +362,21 @@ impl Robot {
                 }
             }
             Task::Track(path, context) => {
-                #[cfg(not(feature = "wired-joystick"))]
-                if *self.joystick_deadline.lock().await >= Instant::now() {
-                    return;
+                if self.drive_blocking.try_drive_automatic().await {
+                    let clone = context.clone();
+                    let mut tracker = Tracker {
+                        path,
+                        context: clone,
+                    };
+                    if let Ok((k, rudder)) = tracker.track(pose) {
+                        self.check_and_drive(Physical {
+                            speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * k,
+                            rudder,
+                        })
+                        .await;
+                    }
+                    *context = tracker.context;
                 }
-                if *self.artificial_deadline.lock().await >= Instant::now() {
-                    return;
-                }
-                let clone = context.clone();
-                let mut tracker = Tracker {
-                    path: &path,
-                    context: clone,
-                };
-                if let Ok((k, rudder)) = tracker.track(pose) {
-                    self.check_and_drive(Physical {
-                        speed: f32::from_bits(self.tracking_speed.load(Relaxed)) * k,
-                        rudder,
-                    })
-                    .await;
-                }
-                *context = tracker.context;
             }
         }
     }
@@ -418,7 +449,7 @@ mod macros {
                 futures::join! {
                     $( $tokens )*
                 }
-            });
+            })
         };
     }
 
@@ -426,18 +457,14 @@ mod macros {
 }
 
 #[inline]
-pub(crate) const fn isometry(x: f32, y: f32, cos: f32, sin: f32) -> Isometry2<f32> {
-    use parry2d::na::{Complex, Translation, Unit};
-    Isometry2 {
-        translation: Translation {
-            vector: vector(x, y),
-        },
-        rotation: Unit::new_unchecked(Complex { re: cos, im: sin }),
-    }
-}
-
-#[inline]
 pub(crate) const fn vector(x: f32, y: f32) -> Vector2<f32> {
     use parry2d::na::{ArrayStorage, Vector};
     Vector::from_array_storage(ArrayStorage([[x, y]]))
+}
+
+#[inline]
+pub(crate) const fn point(x: f32, y: f32) -> Point2<f32> {
+    Point {
+        coords: vector(x, y),
+    }
 }
